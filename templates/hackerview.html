@@ -1,0 +1,532 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<div class="container-fluid py-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-4">
+
+        <div>
+            <h2 class="fw-bold mb-1">
+                <i class="bi bi-shield-exclamation me-2"></i>
+                Sentinel Traffic Monitor
+            </h2>
+
+            <p class="text-muted mb-0">
+                Live communication traffic observer
+            </p>
+        </div>
+
+        <span id="viewerStatus"
+              class="badge bg-warning text-dark">
+            Connecting...
+        </span>
+
+    </div>
+
+
+    <div class="row g-4">
+
+        <div class="col-lg-8">
+
+            <div class="card shadow-sm border-0">
+
+                <div class="card-header bg-dark text-white">
+
+                    <div class="d-flex justify-content-between">
+
+                        <span>
+                            <i class="bi bi-activity me-2"></i>
+                            Live Traffic
+                        </span>
+
+                        <span id="packetCount">
+                            Packets: 0
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <div
+                    id="packetContainer"
+                    class="card-body bg-light"
+                    style="height: 650px; overflow-y: auto;"
+                >
+
+                    <div id="emptyState"
+                         class="text-center text-muted py-5">
+
+                        <i class="bi bi-broadcast fs-1"></i>
+
+                        <p class="mt-3 mb-0">
+                            Waiting for network traffic...
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="col-lg-4">
+
+            <div class="card shadow-sm border-0 mb-4">
+
+                <div class="card-header bg-dark text-white">
+                    Monitor Status
+                </div>
+
+                <div class="card-body">
+
+                    <div class="d-flex justify-content-between mb-3">
+
+                        <span>Connection</span>
+
+                        <span id="connectionIndicator"
+                              class="badge bg-warning text-dark">
+                            Connecting
+                        </span>
+
+                    </div>
+
+
+                    <div class="d-flex justify-content-between mb-3">
+
+                        <span>Packets Captured</span>
+
+                        <strong id="totalPackets">
+                            0
+                        </strong>
+
+                    </div>
+
+
+                    <div class="d-flex justify-content-between mb-3">
+
+                        <span>Security Mode</span>
+
+                        <span id="currentSecurity"
+                              class="badge bg-secondary">
+                            PLAINTEXT
+                        </span>
+
+                    </div>
+
+
+                    <div class="d-flex justify-content-between">
+
+                        <span>Monitoring</span>
+
+                        <span class="badge bg-success">
+                            ACTIVE
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div class="card shadow-sm border-0">
+
+                <div class="card-header bg-dark text-white">
+                    Latest Packet
+                </div>
+
+                <div class="card-body">
+
+                    <div class="mb-3">
+
+                        <small class="text-muted d-block">
+                            Source
+                        </small>
+
+                        <strong id="latestSource">
+                            —
+                        </strong>
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <small class="text-muted d-block">
+                            Destination
+                        </small>
+
+                        <strong id="latestDestination">
+                            —
+                        </strong>
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <small class="text-muted d-block">
+                            Size
+                        </small>
+
+                        <strong id="latestSize">
+                            —
+                        </strong>
+
+                    </div>
+
+
+                    <div>
+
+                        <small class="text-muted d-block">
+                            Timestamp
+                        </small>
+
+                        <small id="latestTimestamp">
+                            —
+                        </small>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+const viewerProtocol =
+    window.location.protocol === "https:"
+        ? "wss:"
+        : "ws:";
+
+
+const viewerSocket =
+    new WebSocket(
+        `${viewerProtocol}//${window.location.host}/ws/viewer`
+    );
+
+
+const viewerStatus =
+    document.getElementById("viewerStatus");
+
+const connectionIndicator =
+    document.getElementById("connectionIndicator");
+
+const packetContainer =
+    document.getElementById("packetContainer");
+
+const emptyState =
+    document.getElementById("emptyState");
+
+const packetCount =
+    document.getElementById("packetCount");
+
+const totalPackets =
+    document.getElementById("totalPackets");
+
+const currentSecurity =
+    document.getElementById("currentSecurity");
+
+const latestSource =
+    document.getElementById("latestSource");
+
+const latestDestination =
+    document.getElementById("latestDestination");
+
+const latestSize =
+    document.getElementById("latestSize");
+
+const latestTimestamp =
+    document.getElementById("latestTimestamp");
+
+
+let packetNumber = 0;
+
+
+viewerSocket.onopen = function () {
+
+    viewerStatus.textContent = "MONITORING";
+    viewerStatus.className = "badge bg-success";
+
+    connectionIndicator.textContent = "Connected";
+    connectionIndicator.className = "badge bg-success";
+
+};
+
+
+viewerSocket.onclose = function () {
+
+    viewerStatus.textContent = "DISCONNECTED";
+    viewerStatus.className = "badge bg-danger";
+
+    connectionIndicator.textContent = "Disconnected";
+    connectionIndicator.className = "badge bg-danger";
+
+};
+
+
+viewerSocket.onerror = function () {
+
+    viewerStatus.textContent = "ERROR";
+    viewerStatus.className = "badge bg-danger";
+
+};
+
+
+viewerSocket.onmessage = function (event) {
+
+    const packet =
+        JSON.parse(event.data);
+
+
+    packetNumber++;
+
+
+    if (emptyState) {
+        emptyState.remove();
+    }
+
+
+    packetCount.textContent =
+        `Packets: ${packetNumber}`;
+
+    totalPackets.textContent =
+        packetNumber;
+
+
+    currentSecurity.textContent =
+        packet.security_mode;
+
+
+    latestSource.textContent =
+        `User ${packet.source}`;
+
+
+    latestDestination.textContent =
+        `User ${packet.destination}`;
+
+
+    latestSize.textContent =
+        `${packet.size} bytes`;
+
+
+    latestTimestamp.textContent =
+        packet.timestamp;
+
+
+    createPacketCard(packet);
+
+};
+
+
+function createPacketCard(packet) {
+
+    const card =
+        document.createElement("div");
+
+
+    card.className =
+        "card border-0 shadow-sm mb-3";
+
+
+    const body =
+        document.createElement("div");
+
+    body.className =
+        "card-body";
+
+
+    const header =
+        document.createElement("div");
+
+    header.className =
+        "d-flex justify-content-between align-items-center mb-3";
+
+
+    const packetTitle =
+        document.createElement("strong");
+
+    packetTitle.textContent =
+        `PACKET #${packetNumber}`;
+
+
+    const securityBadge =
+        document.createElement("span");
+
+    securityBadge.className =
+        "badge bg-secondary";
+
+    securityBadge.textContent =
+        packet.security_mode;
+
+
+    header.appendChild(packetTitle);
+    header.appendChild(securityBadge);
+
+
+    const route =
+        document.createElement("div");
+
+    route.className =
+        "d-flex align-items-center gap-2 mb-3";
+
+
+    const source =
+        document.createElement("span");
+
+    source.className =
+        "badge bg-primary";
+
+    source.textContent =
+        `USER ${packet.source}`;
+
+
+    const arrow =
+        document.createElement("span");
+
+    arrow.innerHTML =
+        `<i class="bi bi-arrow-right"></i>`;
+
+
+    const destination =
+        document.createElement("span");
+
+    destination.className =
+        "badge bg-dark";
+
+    destination.textContent =
+        `USER ${packet.destination}`;
+
+
+    route.appendChild(source);
+    route.appendChild(arrow);
+    route.appendChild(destination);
+
+
+    const messageLabel =
+        document.createElement("small");
+
+    messageLabel.className =
+        "text-muted d-block";
+
+    messageLabel.textContent =
+        "Captured message";
+
+
+    const message =
+        document.createElement("div");
+
+    message.className =
+        "bg-light border rounded p-2 mb-3";
+
+
+    /*
+        Never use innerHTML for packet.message.
+        It is external/user-controlled data.
+    */
+
+    message.textContent =
+        packet.message;
+
+
+    const metadata =
+        document.createElement("div");
+
+    metadata.className =
+        "row g-2";
+
+
+    addMetadata(
+        metadata,
+        "Size",
+        `${packet.size} bytes`
+    );
+
+
+    addMetadata(
+        metadata,
+        "Time",
+        packet.timestamp
+    );
+
+
+    addMetadata(
+        metadata,
+        "Status",
+        "RELAYED"
+    );
+
+
+    body.appendChild(header);
+    body.appendChild(route);
+    body.appendChild(messageLabel);
+    body.appendChild(message);
+    body.appendChild(metadata);
+
+    card.appendChild(body);
+
+
+    packetContainer.prepend(card);
+
+}
+
+
+function addMetadata(container, label, value) {
+
+    const column =
+        document.createElement("div");
+
+    column.className =
+        "col-md-4";
+
+
+    const box =
+        document.createElement("div");
+
+    box.className =
+        "border rounded p-2 bg-white";
+
+
+    const labelElement =
+        document.createElement("small");
+
+    labelElement.className =
+        "text-muted d-block";
+
+    labelElement.textContent =
+        label;
+
+
+    const valueElement =
+        document.createElement("strong");
+
+    valueElement.className =
+        "small";
+
+    valueElement.textContent =
+        value;
+
+
+    box.appendChild(labelElement);
+    box.appendChild(valueElement);
+
+    column.appendChild(box);
+
+    container.appendChild(column);
+
+}
+
+</script>
+
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container">
+<h1 class="display-6">Name: {{user.name}}</h1>
+<h1 class="display-6">Email: {{user.email}}</h1>
+<h1 class="display-6">ID: {{user.id}}</h1>
+<p class="lead">Hash: {{user.password_hash}}</h1>
+</div>
+{% endblock %}
