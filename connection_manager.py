@@ -30,6 +30,9 @@ class ConnectionManager:
     async def send_to_viewers(self, message: dict):
         for websocket in self.viewer_connections:
             await websocket.send_json(message)
+    async def send_security_event(self, event: dict):
+        for websocket in self.viewer_connections:
+            await websocket.send_json(event)
 
 
 manager = ConnectionManager()

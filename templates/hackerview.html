@@ -18,7 +18,7 @@
         </div>
 
         <span id="viewerStatus"
-              class="badge bg-warning text-dark">
+            class="badge bg-warning text-dark">
             Connecting...
         </span>
 
@@ -56,7 +56,7 @@
                 >
 
                     <div id="emptyState"
-                         class="text-center text-muted py-5">
+                        class="text-center text-muted py-5">
 
                         <i class="bi bi-broadcast fs-1"></i>
 
@@ -88,7 +88,7 @@
                         <span>Connection</span>
 
                         <span id="connectionIndicator"
-                              class="badge bg-warning text-dark">
+                            class="badge bg-warning text-dark">
                             Connecting
                         </span>
 
@@ -111,7 +111,7 @@
                         <span>Security Mode</span>
 
                         <span id="currentSecurity"
-                              class="badge bg-secondary">
+                            class="badge bg-secondary">
                             PLAINTEXT
                         </span>
 
@@ -284,201 +284,108 @@ viewerSocket.onerror = function () {
 };
 
 
-viewerSocket.onmessage = function (event) {
+viewerSocket.onmessage = function(event) {
 
-    const packet =
-        JSON.parse(event.data);
+    const data = JSON.parse(event.data);
 
-
-    packetNumber++;
-
-
-    if (emptyState) {
-        emptyState.remove();
+    if (data.type === "security_event") {
+        createSecurityEvent(data);
+        return;
     }
 
-
-    packetCount.textContent =
-        `Packets: ${packetNumber}`;
-
-    totalPackets.textContent =
-        packetNumber;
-
-
-    currentSecurity.textContent =
-        packet.security_mode;
-
-
-    latestSource.textContent =
-        `User ${packet.source}`;
-
-
-    latestDestination.textContent =
-        `User ${packet.destination}`;
-
-
-    latestSize.textContent =
-        `${packet.size} bytes`;
-
-
-    latestTimestamp.textContent =
-        packet.timestamp;
-
-
-    createPacketCard(packet);
-
+    createPacketCard(data);
 };
-
-
 function createPacketCard(packet) {
 
     const card =
         document.createElement("div");
-
-
     card.className =
         "card border-0 shadow-sm mb-3";
-
-
     const body =
         document.createElement("div");
-
     body.className =
         "card-body";
-
-
     const header =
         document.createElement("div");
-
     header.className =
         "d-flex justify-content-between align-items-center mb-3";
-
-
     const packetTitle =
         document.createElement("strong");
-
     packetTitle.textContent =
         `PACKET #${packetNumber}`;
-
-
     const securityBadge =
         document.createElement("span");
-
     securityBadge.className =
         "badge bg-secondary";
-
     securityBadge.textContent =
         packet.security_mode;
-
-
     header.appendChild(packetTitle);
     header.appendChild(securityBadge);
-
-
     const route =
         document.createElement("div");
-
     route.className =
         "d-flex align-items-center gap-2 mb-3";
-
-
     const source =
         document.createElement("span");
-
     source.className =
         "badge bg-primary";
-
     source.textContent =
         `USER ${packet.source}`;
-
-
     const arrow =
         document.createElement("span");
-
     arrow.innerHTML =
         `<i class="bi bi-arrow-right"></i>`;
-
-
     const destination =
         document.createElement("span");
-
     destination.className =
         "badge bg-dark";
-
     destination.textContent =
         `USER ${packet.destination}`;
-
-
     route.appendChild(source);
     route.appendChild(arrow);
     route.appendChild(destination);
-
-
     const messageLabel =
         document.createElement("small");
-
     messageLabel.className =
         "text-muted d-block";
-
     messageLabel.textContent =
         "Captured message";
-
-
     const message =
         document.createElement("div");
-
     message.className =
         "bg-light border rounded p-2 mb-3";
-
-
     /*
         Never use innerHTML for packet.message.
         It is external/user-controlled data.
     */
-
     message.textContent =
         packet.message;
-
-
     const metadata =
         document.createElement("div");
-
     metadata.className =
         "row g-2";
-
-
     addMetadata(
         metadata,
         "Size",
         `${packet.size} bytes`
     );
-
-
     addMetadata(
         metadata,
         "Time",
         packet.timestamp
     );
-
-
     addMetadata(
         metadata,
         "Status",
         "RELAYED"
     );
-
-
     body.appendChild(header);
     body.appendChild(route);
     body.appendChild(messageLabel);
     body.appendChild(message);
     body.appendChild(metadata);
-
     card.appendChild(body);
-
-
     packetContainer.prepend(card);
-
 }
 
 
@@ -525,6 +432,51 @@ function addMetadata(container, label, value) {
 
     container.appendChild(column);
 
+}
+
+function createSecurityEvent(event) {
+    if (emptyState) {
+        emptyState.remove();
+    }
+    const card = document.createElement("div");
+    card.className =
+        "card border-danger shadow-sm mb-3";
+    const body = document.createElement("div");
+    body.className = "card-body";
+    const header = document.createElement("div");
+    header.className =
+        "d-flex justify-content-between align-items-center mb-2";
+    const title = document.createElement("strong");
+    title.textContent =
+        "SECURITY EVENT";
+    const status = document.createElement("span");
+    status.className =
+        event.status === "BLOCKED"
+            ? "badge bg-success"
+            : "badge bg-warning";
+    status.textContent =
+        event.status;
+    header.appendChild(title);
+    header.appendChild(status);
+    const eventName = document.createElement("h5");
+    eventName.className = "text-danger";
+    eventName.textContent =
+        event.event;
+    const description = document.createElement("p");
+    description.className = "mb-2";
+    description.textContent =
+        event.message;
+    const timestamp = document.createElement("small");
+    timestamp.className =
+        "text-muted";
+    timestamp.textContent =
+        event.timestamp;
+    body.appendChild(header);
+    body.appendChild(eventName);
+    body.appendChild(description);
+    body.appendChild(timestamp);
+    card.appendChild(body);
+    packetContainer.prepend(card);
 }
 
 </script>

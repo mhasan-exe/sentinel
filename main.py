@@ -15,7 +15,7 @@ from security import (
     decode_access_token,
 )
 from connection_manager import manager
-
+from security_events import create_security_event
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -62,6 +62,14 @@ async def websocket_endpoint(websocket: WebSocket):
     token = websocket.cookies.get("access_token")
 
     if not token:
+        event = create_security_event(
+        event_type="UNAUTHORIZED_WEBSOCKET",
+        status="BLOCKED",
+        message="WebSocket connection attempted without authentication"
+        )
+
+        await manager.send_security_event(event)
+
         await websocket.close(code=1008)
         return
 
@@ -70,6 +78,13 @@ async def websocket_endpoint(websocket: WebSocket):
         payload = decode_access_token(token)
         user_id = int(payload["sub"])
     except Exception:
+        event = create_security_event(
+        event_type="INVALID_JWT",
+        status="BLOCKED",
+        message="WebSocket connection attempted with an invalid JWT"
+        )
+
+        await manager.send_security_event(event)
         await websocket.close(code=1008)
         return
 
@@ -111,6 +126,21 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.websocket("/ws/viewer")
 async def viewer_websocket(websocket: WebSocket):
+
+    token = websocket.cookies.get("access_token")
+
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        token = token.replace("Bearer ", "")
+        payload = decode_access_token(token)
+        user_id = int(payload["sub"])
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
     await manager.connect_viewer(websocket)
 
     try:
@@ -119,7 +149,6 @@ async def viewer_websocket(websocket: WebSocket):
 
     except WebSocketDisconnect:
         manager.disconnect_viewer(websocket)
-
 
 @app.get("/register")
 def register_page(request: Request):
