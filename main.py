@@ -16,6 +16,7 @@ from security import (
 )
 from connection_manager import manager
 from security_events import create_security_event
+from security_config import SECURITY_CONFIG
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
