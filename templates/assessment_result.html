@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<div class="container py-4" style="max-width: 700px;">
+
+    <div class="text-center mb-4">
+        <span class="badge bg-primary mb-2">SECURITY PROFILE</span>
+        <h2 class="fw-bold">{{ profile.profile_name }}</h2>
+        <p class="text-muted">{{ profile.profile_description }}</p>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <strong>Overall Security Awareness</strong>
+                <span class="badge bg-dark fs-6">{{ profile.overall_score }}%</span>
+            </div>
+
+            {% for category, label in profile.category_labels.items() %}
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span>{{ label }}</span>
+                        <span>{{ profile.category_scores[category] }}%</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div
+                            class="progress-bar {% if category == profile.strongest_category %}bg-success{% elif category == profile.weakest_category %}bg-warning{% else %}bg-primary{% endif %}"
+                            style="width: {{ profile.category_scores[category] }}%;"
+                        ></div>
+                    </div>
+                </div>
+            {% endfor %}
+
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle mb-2">
+                        <i class="bi bi-award-fill me-1"></i>Strength
+                    </span>
+                    <p class="mb-0 fw-semibold">{{ profile.strongest_label }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle mb-2">
+                        <i class="bi bi-compass-fill me-1"></i>Area to Explore
+                    </span>
+                    <p class="mb-0 fw-semibold">{{ profile.weakest_label }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h6>Recommended demonstrations in the lab</h6>
+            <ul class="mb-0">
+                {% for demo in profile.recommended_demos %}
+                    <li>{{ demo }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <div class="text-center">
+        {% if logged_in %}
+            <a href="/dashboard" class="btn btn-primary btn-lg px-4">
+                Enter Security Lab
+            </a>
+        {% else %}
+            <a href="/login" class="btn btn-primary btn-lg px-4">
+                Log In to Enter the Lab
+            </a>
+            <p class="text-muted small mt-2">
+                Your profile is saved — log in or register to access the dashboard.
+            </p>
+        {% endif %}
+    </div>
+
+</div>
+
+{% endblock %}

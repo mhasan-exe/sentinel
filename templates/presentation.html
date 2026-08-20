@@ -1,0 +1,76 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<div class="container-fluid py-4 text-center">
+
+    <h4 class="mb-1">Sentinel — Project Presentation</h4>
+    <p class="text-muted mb-3">
+        Use the <strong>Left</strong>/<strong>Right</strong> arrow keys, the
+        buttons below, or the hand-gesture controller (see
+        <code>gesture_slides.py</code>) to navigate.
+    </p>
+
+    <div class="mb-3">
+        <a href="/static/presentation/sentinel_presentation.pdf"
+           class="btn btn-sm btn-outline-secondary"
+           target="_blank">
+            Open original PDF
+        </a>
+    </div>
+
+    <div class="d-flex justify-content-center">
+        <img
+            id="slideImage"
+            src="/static/presentation/{{ slide_files[0] }}"
+            class="border rounded shadow-sm"
+            style="max-width: 100%; max-height: 75vh;"
+            alt="Slide"
+        >
+    </div>
+
+    <div class="d-flex justify-content-center align-items-center gap-3 mt-3">
+        <button class="btn btn-outline-dark" onclick="prevSlide()">&larr; Prev</button>
+        <span id="slideCounter" class="text-muted"></span>
+        <button class="btn btn-outline-dark" onclick="nextSlide()">Next &rarr;</button>
+    </div>
+
+</div>
+
+<script>
+
+const slides = {{ slide_files | tojson }};
+let index = 0;
+
+const image = document.getElementById("slideImage");
+const counter = document.getElementById("slideCounter");
+
+function render() {
+    image.src = `/static/presentation/${slides[index]}`;
+    counter.textContent = `Slide ${index + 1} / ${slides.length}`;
+}
+
+function nextSlide() {
+    if (index < slides.length - 1) {
+        index += 1;
+        render();
+    }
+}
+
+function prevSlide() {
+    if (index > 0) {
+        index -= 1;
+        render();
+    }
+}
+
+document.addEventListener("keydown", function (event) {
+    if (event.key === "ArrowRight") nextSlide();
+    if (event.key === "ArrowLeft") prevSlide();
+});
+
+render();
+
+</script>
+
+{% endblock %}

@@ -1,6 +1,25 @@
-    {%- extends "layout.html" -%}
-    {% block content %}
-        <h1 class="display-1">Form Submitted</h1>
-        <p class="lead">Thank you <strong>{{ name }}</strong> for submitting the form. We have received your information.</p>
-        <p class="lead">Your email address is: <strong>{{ email }}</strong></p>
-    {% endblock %}
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-5">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-success text-white py-3">
+                    <h5 class="mb-0"><i class="bi bi-check-circle-fill me-2"></i>Account created</h5>
+                </div>
+                <div class="card-body p-4">
+                    <p>Welcome, <strong>{{ name }}</strong> — your Sentinel account is ready.</p>
+                    <p class="text-muted small">
+                        Signed up with <strong>{{ email }}</strong>. Your password was hashed
+                        with Argon2id before it was ever written to the database.
+                    </p>
+                    <a href="/login" class="btn btn-primary w-100">
+                        <i class="bi bi-box-arrow-in-right me-1"></i> Log in now
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

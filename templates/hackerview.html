@@ -254,6 +254,28 @@ const latestTimestamp =
 let packetNumber = 0;
 
 
+// Consistent, high-contrast color coding across the whole app: a
+// VULNERABLE result should look alarming, a BLOCKED result should look
+// safe — not both rendered as the same washed-out yellow.
+function statusBadgeClass(status) {
+    switch (status) {
+        case "BLOCKED":    return "badge bg-success";
+        case "VULNERABLE": return "badge bg-danger";
+        case "WARNING":    return "badge bg-warning text-dark";
+        case "MEASURED":   return "badge bg-info text-dark";
+        case "RUNNING":    return "badge bg-primary";
+        default:           return "badge bg-secondary";
+    }
+}
+
+function securityModeBadgeClass(mode) {
+    if (!mode) return "badge bg-secondary";
+    if (mode.startsWith("ENCRYPTED"))   return "badge bg-success";
+    if (mode === "PLAINTEXT")           return "badge bg-danger";
+    return "badge bg-warning text-dark"; // e.g. "ENCRYPTION ON — NO SESSION KEY"
+}
+
+
 viewerSocket.onopen = function () {
 
     viewerStatus.textContent = "MONITORING";
@@ -297,6 +319,21 @@ viewerSocket.onmessage = function(event) {
 };
 function createPacketCard(packet) {
 
+    packetNumber += 1;
+
+    // These sidebar fields were being read into JS variables but never
+    // actually written to — the whole "Monitor Status" / "Latest Packet"
+    // panel sat frozen on its placeholder values. Now it reflects the
+    // real most recent packet.
+    packetCount.textContent = `Packets: ${packetNumber}`;
+    totalPackets.textContent = packetNumber;
+    currentSecurity.textContent = packet.security_mode;
+    currentSecurity.className = securityModeBadgeClass(packet.security_mode);
+    latestSource.textContent = `USER ${packet.source}`;
+    latestDestination.textContent = `USER ${packet.destination}`;
+    latestSize.textContent = `${packet.size} bytes`;
+    latestTimestamp.textContent = packet.timestamp;
+
     const card =
         document.createElement("div");
     card.className =
@@ -316,7 +353,7 @@ function createPacketCard(packet) {
     const securityBadge =
         document.createElement("span");
     securityBadge.className =
-        "badge bg-secondary";
+        securityModeBadgeClass(packet.security_mode);
     securityBadge.textContent =
         packet.security_mode;
     header.appendChild(packetTitle);
@@ -379,6 +416,20 @@ function createPacketCard(packet) {
         "Status",
         "RELAYED"
     );
+    if (packet.nonce) {
+        addMetadata(
+            metadata,
+            "AEAD Nonce",
+            `${packet.nonce.slice(0, 12)}...`
+        );
+    }
+    if (packet.signed) {
+        addMetadata(
+            metadata,
+            "Signature",
+            `${packet.sig_algorithm} (${packet.signature_size}B)`
+        );
+    }
     body.appendChild(header);
     body.appendChild(route);
     body.appendChild(messageLabel);
@@ -451,9 +502,7 @@ function createSecurityEvent(event) {
         "SECURITY EVENT";
     const status = document.createElement("span");
     status.className =
-        event.status === "BLOCKED"
-            ? "badge bg-success"
-            : "badge bg-warning";
+        statusBadgeClass(event.status);
     status.textContent =
         event.status;
     header.appendChild(title);

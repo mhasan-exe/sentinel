@@ -1,18 +1,41 @@
 {% extends "layout.html" %}
 
 {% block content %}
-    <div class="container">
-        <center>
-            <h1 class="display-1">Login</h1>
-            <form method="post" action="/login">
-                <label for="email">Email:</label>
-                <input type="email" id="email" name="email" required>
-                <br>
-                <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required>
-                <br>
-                <button type="submit">Login</button>
-            </form>
-        </center>
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-5">
+
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-primary text-white py-3">
+                    <h5 class="mb-0"><i class="bi bi-shield-lock-fill me-2"></i>Log in to Sentinel</h5>
+                </div>
+
+                <div class="card-body p-4">
+                    <form method="post" action="/login">
+                        <div class="mb-3">
+                            <label for="email" class="form-label fw-semibold">Email</label>
+                            <input type="email" id="email" name="email" class="form-control" required autofocus>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="password" class="form-label fw-semibold">Password</label>
+                            <input type="password" id="password" name="password" class="form-control" required>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-box-arrow-in-right me-1"></i> Login
+                        </button>
+                    </form>
+
+                    <div class="text-center mt-3">
+                        <small class="text-muted">
+                            Don't have an account? <a href="/register">Register</a>
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+        </div>
     </div>
+</div>
 {% endblock %}

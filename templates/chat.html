@@ -2,6 +2,17 @@
 
 {% block content %}
 
+<style>
+@keyframes latencyPulse {
+    0%   { transform: scale(1);    box-shadow: 0 0 0 0 rgba(13,110,253,0.5); }
+    50%  { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(13,110,253,0); }
+    100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(13,110,253,0); }
+}
+.latency-badge-pulse {
+    animation: latencyPulse 0.5s ease-out;
+}
+</style>
+
 <div class="container py-4">
     <div class="row justify-content-center">
         <div class="col-md-9 col-lg-8">
@@ -24,6 +35,10 @@
                             class="badge bg-warning text-dark">
                             Connecting...
                         </span>
+                    </div>
+
+                    <div id="latencyBadges" class="mt-2 d-flex gap-2 flex-wrap">
+                        <!-- Populated live as real round-trip times come back per medium -->
                     </div>
                 </div>
 
@@ -105,6 +120,57 @@ const sendButton =
 const connectionStatus =
     document.getElementById("connectionStatus");
 
+const latencyBadges =
+    document.getElementById("latencyBadges");
+
+
+// REAL client-measured round trips, keyed by medium (security_mode the
+// server actually used for that message). No fabricated numbers here —
+// pendingSends tracks exactly when THIS browser sent each message, and
+// the round trip is only recorded once the server's own echo of that
+// same client_msg_id comes back.
+const pendingSends = {};       // client_msg_id -> performance.now() at send time
+const latencyByMedium = {};    // medium -> { count, totalMs, lastMs }
+
+function makeClientMsgId() {
+    return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function recordLatency(medium, rttMs) {
+    if (!latencyByMedium[medium]) {
+        latencyByMedium[medium] = { count: 0, totalMs: 0, lastMs: 0 };
+    }
+    const stats = latencyByMedium[medium];
+    stats.count += 1;
+    stats.totalMs += rttMs;
+    stats.lastMs = rttMs;
+
+    renderLatencyBadges();
+
+    if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+            type: "latency_report",
+            security_mode: medium,
+            rtt_ms: rttMs
+        }));
+    }
+}
+
+function renderLatencyBadges() {
+    latencyBadges.innerHTML = "";
+
+    for (const [medium, stats] of Object.entries(latencyByMedium)) {
+        const avg = (stats.totalMs / stats.count).toFixed(2);
+
+        const badge = document.createElement("span");
+        badge.className = "badge bg-secondary latency-badge-pulse";
+        badge.textContent =
+            `${medium}: ${stats.lastMs.toFixed(2)}ms (avg ${avg}ms, n=${stats.count})`;
+
+        latencyBadges.appendChild(badge);
+    }
+}
+
 
 socket.onopen = function () {
 
@@ -133,11 +199,21 @@ socket.onmessage = function (event) {
 
     const data = JSON.parse(event.data);
 
-    const messageRow =
-        document.createElement("div");
-
     const isMe =
         String(data.userId) === String("{{ user_id }}");
+
+    // REAL round trip: this only fires once the SERVER echoes back the
+    // exact client_msg_id this browser generated when it sent — i.e.
+    // the message has genuinely gone client -> server -> (encrypt/sign
+    // if that medium is on) -> broadcast -> back to this client.
+    if (isMe && data.client_msg_id && pendingSends[data.client_msg_id] !== undefined) {
+        const rtt = performance.now() - pendingSends[data.client_msg_id];
+        delete pendingSends[data.client_msg_id];
+        recordLatency(data.security_mode || "UNKNOWN", rtt);
+    }
+
+    const messageRow =
+        document.createElement("div");
 
     messageRow.className =
         "d-flex mb-3 " +
@@ -223,7 +299,13 @@ function sendMessage() {
 
         recipient_id: Number(recipient),
 
-        text: text
+        text: text,
+
+        client_msg_id: (function () {
+            const id = makeClientMsgId();
+            pendingSends[id] = performance.now();
+            return id;
+        })()
 
     }));
 

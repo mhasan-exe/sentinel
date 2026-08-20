@@ -1,0 +1,793 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<div class="container-fluid py-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-4">
+
+        <div>
+            <h2 class="fw-bold mb-1">
+                <i class="bi bi-shield-lock-fill me-2"></i>
+                Sentinel Security Dashboard
+            </h2>
+
+            <p class="text-muted mb-0">
+                Security control and attack simulation center
+            </p>
+        </div>
+
+        <span id="connectionStatus"
+              class="badge bg-warning text-dark">
+            Connecting...
+        </span>
+
+    </div>
+
+
+    <div class="row g-3 mb-4" id="statCards">
+
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small text-uppercase">Classical Handshake</div>
+                    <div class="fs-4 fw-bold" id="statClassicalHandshake">—</div>
+                    <div class="small text-muted">avg ms, X25519+Ed25519</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small text-uppercase">PQC Handshake</div>
+                    <div class="fs-4 fw-bold" id="statPqcHandshake">—</div>
+                    <div class="small text-muted">avg ms, ML-KEM-768+ML-DSA-65</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small text-uppercase">Real /ws Handshakes</div>
+                    <div class="fs-4 fw-bold" id="statRealHandshakes">—</div>
+                    <div class="small text-muted">captured in last benchmark window</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="text-muted small text-uppercase">Chat Latency</div>
+                        <div class="fs-6" id="statMessageLatency">no data yet</div>
+                        <div class="small text-muted">real round trip, by medium</div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="openHistory()">
+                        <i class="bi bi-clock-history"></i> History
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+
+    <div class="row g-4">
+
+        <div class="col-lg-8">
+
+            <div class="card shadow-sm border-0">
+
+                <div class="card-header bg-dark text-white">
+                    <i class="bi bi-sliders me-2"></i>
+                    Security Layers
+                </div>
+
+                <div id="securityLayers"
+                     class="card-body">
+
+                    <div class="text-muted">
+                        Loading security configuration...
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="col-lg-4">
+
+            <div class="card shadow-sm border-0">
+
+                <div class="card-header bg-danger text-white">
+                    <i class="bi bi-bug-fill me-2"></i>
+                    Attack Lab
+                </div>
+
+                <div class="card-body">
+
+                    <p class="text-muted small">
+                        Controlled security demonstrations.
+                    </p>
+
+                    <button
+                        class="btn btn-outline-danger w-100 mb-2"
+                        onclick="runAttack('UNAUTHORIZED_WEBSOCKET')">
+                        Unauthorized WebSocket
+                    </button>
+
+                    <button
+                        class="btn btn-outline-danger w-100 mb-2"
+                        onclick="runAttack('INVALID_JWT')">
+                        Invalid JWT
+                    </button>
+
+                    <button
+                        class="btn btn-outline-danger w-100 mb-2"
+                        onclick="runAttack('XSS_TEST')">
+                        XSS Test
+                    </button>
+
+                    <button
+                        class="btn btn-outline-danger w-100 mb-2"
+                        onclick="runAttack('REPLAY_TEST')">
+                        Replay Test
+                    </button>
+
+                    <button
+                        class="btn btn-outline-danger w-100"
+                        onclick="runAttack('MESSAGE_TAMPERING')">
+                        Message Tampering
+                    </button>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="card shadow-sm border-0 mt-4">
+
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <div>
+                <i class="bi bi-speedometer2 me-2"></i>
+                Performance Benchmark
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <select id="benchmarkDuration" class="form-select form-select-sm" style="width: auto;">
+                    <option value="30">30s</option>
+                    <option value="60" selected>60s</option>
+                    <option value="120">120s</option>
+                </select>
+                <button id="benchmarkButton" class="btn btn-sm btn-outline-light" onclick="runBenchmark()">
+                    <i class="bi bi-play-fill me-1"></i> Run Benchmark
+                </button>
+            </div>
+        </div>
+
+        <div class="card-body">
+
+            <p class="text-muted small mb-2">
+                Runs real X25519+Ed25519 and ML-KEM-768+ML-DSA-65 handshakes back-to-back
+                for the full duration — this is a live window, not a single measurement.
+                Any real <code>/ws</code> chat connection made while it's running has its
+                own real handshake folded into the same result.
+            </p>
+
+            <div id="benchmarkProgressWrap" class="mb-3" style="display: none;">
+                <div class="d-flex justify-content-between small text-muted mb-1">
+                    <span id="benchmarkProgressLabel">Running...</span>
+                    <span id="benchmarkProgressTime">0s / 60s</span>
+                </div>
+                <div class="progress" style="height: 10px;">
+                    <div id="benchmarkProgressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div id="benchmarkResults">
+                <div class="text-muted">No benchmark run yet this session.</div>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- Experiment History Modal -->
+    <div class="modal fade" id="historyModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-clock-history me-2"></i>Experiment History</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button class="btn btn-outline-secondary active" onclick="filterHistory('ALL', event)">All</button>
+                            <button class="btn btn-outline-secondary" onclick="filterHistory('HANDSHAKE_BENCHMARK_SESSION', event)">Sessions</button>
+                            <button class="btn btn-outline-secondary" onclick="filterHistory('HANDSHAKE', event)">Real Handshakes</button>
+                            <button class="btn btn-outline-secondary" onclick="filterHistory('MESSAGE_LATENCY', event)">Chat Latency</button>
+                            <button class="btn btn-outline-secondary" onclick="filterHistory('MESSAGE_TAMPERING,REPLAY_TEST,XSS_TEST,INVALID_JWT,UNAUTHORIZED_WEBSOCKET,JWT_TAMPERING,DATABASE_LEAK_SIMULATION', event)">Attacks</button>
+                        </div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="loadHistory()">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Type</th>
+                                    <th>Configuration</th>
+                                    <th>Result</th>
+                                    <th>Latency (ms)</th>
+                                    <th>Session</th>
+                                </tr>
+                            </thead>
+                            <tbody id="historyTableBody">
+                                <tr><td colspan="6" class="text-muted">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <div class="card shadow-sm border-0 mt-4">
+
+        <div class="card-header bg-dark text-white">
+
+            <i class="bi bi-terminal-fill me-2"></i>
+            Security Events
+
+        </div>
+
+        <div id="events"
+             class="card-body"
+             style="height: 350px; overflow-y: auto;">
+
+            <div class="text-muted">
+                Waiting for security events...
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+const protocol =
+    window.location.protocol === "https:"
+        ? "wss:"
+        : "ws:";
+
+const socket =
+    new WebSocket(
+        `${protocol}//${window.location.host}/ws/dashboard`
+    );
+
+
+const status =
+    document.getElementById("connectionStatus");
+
+const layers =
+    document.getElementById("securityLayers");
+
+const events =
+    document.getElementById("events");
+
+
+const layerNames = {
+
+    password_hashing:
+        "Password Hashing",
+
+    jwt_authentication:
+        "JWT Authentication",
+
+    websocket_authentication:
+        "WebSocket Authentication",
+
+    input_validation:
+        "Input Validation",
+
+    message_integrity:
+        "Message Integrity",
+
+    encryption:
+        "Encryption",
+
+    tls:
+        "TLS",
+
+    ml_kem:
+        "ML-KEM",
+
+    ml_dsa:
+        "ML-DSA"
+
+};
+
+
+socket.onopen = function() {
+
+    status.textContent = "CONNECTED";
+    status.className = "badge bg-success";
+
+};
+
+
+socket.onclose = function() {
+
+    status.textContent = "DISCONNECTED";
+    status.className = "badge bg-danger";
+
+};
+
+
+socket.onerror = function() {
+
+    status.textContent = "ERROR";
+    status.className = "badge bg-danger";
+
+};
+
+
+socket.onmessage = function(event) {
+
+    const data = JSON.parse(event.data);
+
+    if (data.type === "security_config") {
+        renderSecurityLayers(data.config);
+    }
+
+    if (data.type === "security_event") {
+        renderEvent(data);
+    }
+
+    if (data.type === "benchmark_progress") {
+        renderBenchmarkProgress(data);
+    }
+
+    if (data.type === "benchmark_result") {
+        renderBenchmarkFinal(data.session);
+    }
+
+    if (data.type === "benchmark_error") {
+        alert(data.message);
+        resetBenchmarkButton();
+    }
+
+    if (data.type === "message_latency") {
+        recordDashboardLatency(data.security_mode, data.rtt_ms);
+    }
+
+};
+
+
+function renderSecurityLayers(config) {
+
+    layers.innerHTML = "";
+
+    for (const [key, enabled] of Object.entries(config)) {
+
+        const row =
+            document.createElement("div");
+
+        row.className =
+            "d-flex justify-content-between align-items-center border-bottom py-3";
+
+
+        const name =
+            document.createElement("div");
+
+        name.innerHTML = `
+            <strong>${layerNames[key] || key}</strong>
+            <div class="small text-muted">
+                ${key}
+            </div>
+        `;
+
+
+        const control =
+            document.createElement("div");
+
+
+        const label =
+            document.createElement("label");
+
+        label.className =
+            "form-check form-switch";
+
+
+        const checkbox =
+            document.createElement("input");
+
+        checkbox.type =
+            "checkbox";
+
+        checkbox.className =
+            "form-check-input";
+
+        checkbox.checked =
+            enabled;
+
+        checkbox.style.cursor =
+            "pointer";
+
+
+        checkbox.onchange =
+            function() {
+
+                setSecurityLayer(
+                    key,
+                    checkbox.checked
+                );
+
+            };
+
+
+        label.appendChild(checkbox);
+
+        control.appendChild(label);
+
+
+        row.appendChild(name);
+        row.appendChild(control);
+
+        layers.appendChild(row);
+
+    }
+
+}
+
+
+function setSecurityLayer(layer, enabled) {
+
+    if (socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+
+    socket.send(JSON.stringify({
+
+        action: "SET_SECURITY",
+
+        layer: layer,
+
+        enabled: enabled
+
+    }));
+
+}
+
+
+function runAttack(type) {
+
+    if (socket.readyState !== WebSocket.OPEN) {
+        alert("Dashboard is not connected.");
+        return;
+    }
+
+    socket.send(JSON.stringify({
+
+        action: "RUN_ATTACK",
+
+        attack: type
+
+    }));
+
+}
+
+
+function runBenchmark() {
+
+    if (socket.readyState !== WebSocket.OPEN) {
+        alert("Dashboard is not connected.");
+        return;
+    }
+
+    const duration = Number(document.getElementById("benchmarkDuration").value);
+
+    const button = document.getElementById("benchmarkButton");
+    button.disabled = true;
+    button.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Running...`;
+
+    const wrap = document.getElementById("benchmarkProgressWrap");
+    wrap.style.display = "block";
+    document.getElementById("benchmarkProgressBar").style.width = "0%";
+    document.getElementById("benchmarkProgressTime").textContent = `0s / ${duration}s`;
+    document.getElementById("benchmarkProgressLabel").textContent =
+        "Running real handshakes for the full window — send a chat message now to fold a real /ws handshake into this run.";
+
+    document.getElementById("benchmarkResults").innerHTML =
+        `<div class="text-muted">Warming up...</div>`;
+
+    socket.send(JSON.stringify({
+        action: "RUN_BENCHMARK",
+        duration_seconds: duration
+    }));
+
+}
+
+
+function resetBenchmarkButton() {
+    const button = document.getElementById("benchmarkButton");
+    button.disabled = false;
+    button.innerHTML = `<i class="bi bi-play-fill me-1"></i> Run Benchmark`;
+    document.getElementById("benchmarkProgressWrap").style.display = "none";
+}
+
+
+function renderBenchmarkProgress(data) {
+
+    const pct = Math.min(100, Math.round((data.elapsed_seconds / data.duration_seconds) * 100));
+
+    document.getElementById("benchmarkProgressBar").style.width = `${pct}%`;
+    document.getElementById("benchmarkProgressTime").textContent =
+        `${data.elapsed_seconds}s / ${data.duration_seconds}s`;
+
+    const classicalTxt = data.classical_avg_ms !== null
+        ? `${data.classical_avg_ms}ms avg (${data.classical_iterations} runs)`
+        : "warming up";
+    const pqcTxt = data.pqc_avg_ms !== null
+        ? `${data.pqc_avg_ms}ms avg (${data.pqc_iterations} runs)`
+        : "warming up / unavailable";
+
+    document.getElementById("benchmarkResults").innerHTML = `
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="small text-muted">Classical (X25519 + Ed25519) — live</div>
+                <div class="fs-5 fw-semibold">${classicalTxt}</div>
+            </div>
+            <div class="col-md-6">
+                <div class="small text-muted">PQC (ML-KEM-768 + ML-DSA-65) — live</div>
+                <div class="fs-5 fw-semibold">${pqcTxt}</div>
+            </div>
+        </div>
+    `;
+
+    // Stat cards update live too, not just at the very end
+    document.getElementById("statClassicalHandshake").textContent =
+        data.classical_avg_ms !== null ? `${data.classical_avg_ms} ms` : "—";
+    document.getElementById("statPqcHandshake").textContent =
+        data.pqc_avg_ms !== null ? `${data.pqc_avg_ms} ms` : "—";
+
+}
+
+
+function renderBenchmarkFinal(session) {
+
+    resetBenchmarkButton();
+
+    document.getElementById("statClassicalHandshake").textContent =
+        session.classical_avg_ms !== null ? `${session.classical_avg_ms} ms` : "—";
+    document.getElementById("statPqcHandshake").textContent =
+        session.pqc_avg_ms !== null ? `${session.pqc_avg_ms} ms` : "—";
+    document.getElementById("statRealHandshakes").textContent =
+        session.real_ws_handshakes_captured;
+
+    const mediumEntries = Object.entries(session.real_message_latency_by_medium || {});
+    if (mediumEntries.length > 0) {
+        document.getElementById("statMessageLatency").innerHTML = mediumEntries.map(
+            ([medium, stats]) => `${medium}: ${stats.avg_ms}ms (n=${stats.count})`
+        ).join("<br>");
+    }
+
+    const pqcNote = session.pqc_available
+        ? ""
+        : `<div class="alert alert-warning">ML-KEM/ML-DSA skipped — <code>pqcrypto</code> not installed on the server.</div>`;
+
+    const realHandshakeNote = session.real_ws_handshakes_captured > 0
+        ? `<div class="alert alert-success">Captured ${session.real_ws_handshakes_captured} real <code>/ws</code> connection handshake(s) during this window, averaging ${session.real_ws_handshake_avg_ms}ms.</div>`
+        : `<div class="alert alert-secondary">No real <code>/ws</code> connections happened during this window — open the chat page and send a message while a benchmark is running to capture one.</div>`;
+
+    document.getElementById("benchmarkResults").innerHTML = `
+        ${pqcNote}
+        ${realHandshakeNote}
+        <table class="table table-sm mt-2">
+            <thead>
+                <tr><th></th><th>Classical (X25519 + Ed25519)</th><th>PQC (ML-KEM-768 + ML-DSA-65)</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Synthetic iterations run</td><td>${session.classical_iterations}</td><td>${session.pqc_iterations}</td></tr>
+                <tr><td>Avg handshake time</td><td>${session.classical_avg_ms ?? "—"} ms</td><td>${session.pqc_avg_ms ?? "—"} ms</td></tr>
+            </tbody>
+        </table>
+        <p class="text-muted small mb-0">
+            Window: ${session.duration_seconds}s real time. Session id: <code>${session.session_id}</code> —
+            look it up in History for the full row-by-row detail.
+        </p>
+    `;
+
+}
+
+
+function recordDashboardLatency(medium, rttMs) {
+    const el = document.getElementById("statMessageLatency");
+    const current = el.dataset.stats ? JSON.parse(el.dataset.stats) : {};
+    if (!current[medium]) current[medium] = { count: 0, total: 0 };
+    current[medium].count += 1;
+    current[medium].total += rttMs;
+    el.dataset.stats = JSON.stringify(current);
+
+    el.innerHTML = Object.entries(current).map(
+        ([m, s]) => `${m}: ${(s.total / s.count).toFixed(2)}ms (n=${s.count})`
+    ).join("<br>");
+}
+
+
+let historyFilter = "ALL";
+
+function openHistory() {
+    const modal = new bootstrap.Modal(document.getElementById("historyModal"));
+    modal.show();
+    loadHistory();
+}
+
+function filterHistory(filter, evt) {
+    historyFilter = filter;
+    document.querySelectorAll("#historyModal .btn-group .btn").forEach(b => b.classList.remove("active"));
+    if (evt) evt.target.classList.add("active");
+    loadHistory();
+}
+
+async function loadHistory() {
+    const body = document.getElementById("historyTableBody");
+    body.innerHTML = `<tr><td colspan="6" class="text-muted">Loading...</td></tr>`;
+
+    try {
+        const res = await fetch("/api/experiments");
+        const rows = await res.json();
+
+        const filtered = historyFilter === "ALL"
+            ? rows
+            : rows.filter(r => historyFilter.split(",").includes(r.experiment_type));
+
+        if (filtered.length === 0) {
+            body.innerHTML = `<tr><td colspan="6" class="text-muted">No rows yet.</td></tr>`;
+            return;
+        }
+
+        body.innerHTML = filtered.map(r => `
+            <tr>
+                <td class="small">${new Date(r.created_at).toLocaleTimeString()}</td>
+                <td>${r.experiment_type}</td>
+                <td>${r.configuration}</td>
+                <td>${resultBadge(r.result)}</td>
+                <td>${r.latency_ms !== null ? r.latency_ms.toFixed(3) : "—"}</td>
+                <td class="small text-muted">${r.session_id || "—"}</td>
+            </tr>
+        `).join("");
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="6" class="text-danger">Failed to load: ${e}</td></tr>`;
+    }
+}
+
+function statusBadgeClass(status) {
+    const map = {
+        BLOCKED: "bg-success",
+        VULNERABLE: "bg-danger",
+        MEASURED: "bg-info text-dark",
+        WARNING: "bg-warning text-dark",
+        RUNNING: "bg-primary",
+    };
+    return `badge ${map[status] || "bg-secondary"}`;
+}
+
+function resultBadge(result) {
+    return `<span class="${statusBadgeClass(result)}">${result}</span>`;
+}
+
+
+// Populate stat cards + latency card from history on first load, so
+// the dashboard isn't blank until someone clicks something.
+(async function primeStatsFromHistory() {
+    try {
+        const res = await fetch("/api/experiments");
+        const rows = await res.json();
+
+        const lastSession = rows.find(r => r.experiment_type === "HANDSHAKE_BENCHMARK_SESSION");
+        if (lastSession && lastSession.detail) {
+            renderBenchmarkFinal(lastSession.detail);
+            document.getElementById("benchmarkResults").innerHTML =
+                `<div class="text-muted small mb-2">Showing the most recent benchmark session from history.</div>` +
+                document.getElementById("benchmarkResults").innerHTML;
+        }
+    } catch (e) {
+        // Non-fatal — dashboard still works without prior history.
+    }
+})();
+
+
+function renderEvent(event) {
+
+    const empty =
+        events.querySelector(".text-muted");
+
+    if (empty) {
+        empty.remove();
+    }
+
+
+    const card =
+        document.createElement("div");
+
+    card.className =
+        "border rounded p-3 mb-2";
+
+
+    const header =
+        document.createElement("div");
+
+    header.className =
+        "d-flex justify-content-between";
+
+
+    const title =
+        document.createElement("strong");
+
+    title.textContent =
+        event.event;
+
+
+    const badge =
+        document.createElement("span");
+
+    badge.className =
+        statusBadgeClass(event.status);
+
+    badge.textContent =
+        event.status;
+
+
+    header.appendChild(title);
+    header.appendChild(badge);
+
+
+    const message =
+        document.createElement("div");
+
+    message.className =
+        "small mt-2";
+
+    message.textContent =
+        event.message;
+
+
+    const time =
+        document.createElement("small");
+
+    time.className =
+        "text-muted";
+
+    time.textContent =
+        event.timestamp;
+
+
+    card.appendChild(header);
+    card.appendChild(message);
+    card.appendChild(time);
+
+
+    events.prepend(card);
+
+}
+
+</script>
+
+{% endblock %}

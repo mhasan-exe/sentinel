@@ -1,0 +1,246 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<style>
+/* --- one-question-at-a-time wizard: fade + slide transitions --- */
+.q-slide {
+    display: none;
+}
+.q-slide.active {
+    display: block;
+}
+.q-slide.enter,
+.q-slide.enter-back {
+    opacity: 0;
+    transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.q-slide.enter {
+    transform: translateX(28px);
+}
+.q-slide.enter-back {
+    transform: translateX(-28px);
+}
+.q-slide.enter-active {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.assessment-option {
+    display: block;
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.6rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.assessment-option:hover {
+    border-color: var(--bs-primary);
+    background-color: rgba(13, 110, 253, 0.04);
+}
+.assessment-option input[type="radio"] {
+    margin-right: 0.6rem;
+}
+.assessment-option.selected {
+    border-color: var(--bs-primary);
+    background-color: rgba(13, 110, 253, 0.08);
+}
+</style>
+
+<div class="container py-4" style="max-width: 780px;">
+
+    <div class="text-center mb-4">
+        <h2 class="fw-bold">Security Assessment</h2>
+        <p class="text-muted">
+            Before Sentinel tests your system, let's test your security
+            instincts. {{ questions|length }} questions, mixed knowledge,
+            scenario, and self-assessment.
+        </p>
+    </div>
+
+    <div class="d-flex justify-content-between small text-muted mb-1">
+        <span id="progressLabel">Question 1 of {{ questions|length }}</span>
+        <span id="progressCategory" class="text-primary fw-semibold text-uppercase"></span>
+    </div>
+    <div class="progress mb-4" style="height: 8px;">
+        <div id="progressBar" class="progress-bar bg-primary" style="width: 0%;"></div>
+    </div>
+
+    <form method="post" action="/assessment" id="assessmentForm">
+
+        {% for q in questions %}
+            <div class="q-slide" data-qid="{{ q.id }}" data-category="{{ q.category.replace('_', ' ') }}">
+
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-body">
+
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <span class="badge bg-primary-subtle text-primary-emphasis text-uppercase">
+                                {{ q.category.replace("_", " ") }}
+                            </span>
+                            <span class="badge bg-secondary text-uppercase">
+                                {{ q.type }}
+                            </span>
+                        </div>
+
+                        <p class="fw-semibold fs-5 mb-3">{{ q.text }}</p>
+
+                        {% if q.type == "confidence" %}
+                            <div class="d-flex gap-2 mt-3">
+                                {% for level in range(1, 6) %}
+                                    <label class="assessment-option flex-fill text-center mb-0">
+                                        <input
+                                            class="form-check-input d-block mx-auto mb-1"
+                                            type="radio"
+                                            name="{{ q.id }}"
+                                            value="{{ level }}"
+                                            required
+                                        >
+                                        {{ level }}
+                                    </label>
+                                {% endfor %}
+                            </div>
+                            <div class="d-flex justify-content-between small text-muted mt-1">
+                                <span>Not confident</span>
+                                <span>Very confident</span>
+                            </div>
+                        {% else %}
+                            {% for option in q.options %}
+                                <label class="assessment-option">
+                                    <input
+                                        type="radio"
+                                        name="{{ q.id }}"
+                                        value="{{ loop.index0 }}"
+                                        required
+                                    >
+                                    {{ option }}
+                                </label>
+                            {% endfor %}
+                        {% endif %}
+
+                    </div>
+                </div>
+
+            </div>
+        {% endfor %}
+
+        <div class="d-flex justify-content-between align-items-center mt-4">
+            <button type="button" id="backBtn" class="btn btn-outline-primary px-4" disabled>
+                <i class="bi bi-arrow-left me-1"></i> Back
+            </button>
+            <button type="button" id="nextBtn" class="btn btn-primary btn-lg px-5">
+                Next <i class="bi bi-arrow-right ms-1"></i>
+            </button>
+        </div>
+
+    </form>
+
+</div>
+
+<script>
+
+const slides = Array.from(document.querySelectorAll(".q-slide"));
+const total = slides.length;
+const form = document.getElementById("assessmentForm");
+const backBtn = document.getElementById("backBtn");
+const nextBtn = document.getElementById("nextBtn");
+const progressBar = document.getElementById("progressBar");
+const progressLabel = document.getElementById("progressLabel");
+const progressCategory = document.getElementById("progressCategory");
+
+let currentIndex = 0;
+
+function isAnswered(slide) {
+    const qid = slide.dataset.qid;
+    return form.querySelectorAll(`input[name="${qid}"]:checked`).length > 0;
+}
+
+function highlightSelection(slide) {
+    slide.querySelectorAll(".assessment-option").forEach(opt => {
+        const input = opt.querySelector("input");
+        opt.classList.toggle("selected", input.checked);
+    });
+}
+
+function showSlide(index, direction) {
+
+    slides[currentIndex].classList.remove("active", "enter", "enter-back", "enter-active");
+    currentIndex = index;
+
+    const slide = slides[currentIndex];
+    slide.classList.add("active");
+    slide.classList.add(direction === "back" ? "enter-back" : "enter");
+
+    // force reflow so the transition actually plays instead of snapping
+    void slide.offsetWidth;
+
+    requestAnimationFrame(() => {
+        slide.classList.add("enter-active");
+    });
+
+    updateProgress();
+    updateNav();
+    window.scrollTo({ top: form.offsetTop - 90, behavior: "smooth" });
+
+}
+
+function updateProgress() {
+    const pct = Math.round(((currentIndex + 1) / total) * 100);
+    progressBar.style.width = `${pct}%`;
+    progressLabel.textContent = `Question ${currentIndex + 1} of ${total}`;
+    progressCategory.textContent = slides[currentIndex].dataset.category;
+}
+
+function updateNav() {
+    backBtn.disabled = currentIndex === 0;
+
+    if (currentIndex === total - 1) {
+        nextBtn.innerHTML = `See My Security Profile <i class="bi bi-check-lg ms-1"></i>`;
+    } else {
+        nextBtn.innerHTML = `Next <i class="bi bi-arrow-right ms-1"></i>`;
+    }
+}
+
+nextBtn.addEventListener("click", function () {
+
+    const slide = slides[currentIndex];
+
+    if (!isAnswered(slide)) {
+        slide.classList.add("border-danger");
+        const firstInput = slide.querySelector("input");
+        if (firstInput) firstInput.focus();
+        return;
+    }
+
+    if (currentIndex === total - 1) {
+        form.requestSubmit();
+        return;
+    }
+
+    showSlide(currentIndex + 1, "next");
+
+});
+
+backBtn.addEventListener("click", function () {
+    if (currentIndex > 0) {
+        showSlide(currentIndex - 1, "back");
+    }
+});
+
+// live-highlight the chosen option + auto-advance a beat after picking
+form.addEventListener("change", function (event) {
+    if (event.target.type !== "radio") return;
+
+    const slide = slides[currentIndex];
+    highlightSelection(slide);
+});
+
+// init
+slides[0].classList.add("active", "enter-active");
+updateProgress();
+updateNav();
+
+</script>
+
+{% endblock %}

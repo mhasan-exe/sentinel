@@ -1,0 +1,76 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<div class="container py-5">
+
+    <div class="text-center py-5">
+        <h1 class="display-4 fw-bold">SENTINEL</h1>
+        <p class="lead text-muted">
+            Quantum-Resistant Web Security Lab
+        </p>
+        <p class="fst-italic mb-4">
+            "Test your security instincts. Then test your system."
+        </p>
+
+        <div class="d-flex justify-content-center gap-3 flex-wrap">
+            <a href="/assessment" class="btn btn-primary btn-lg px-4">
+                Take Security Assessment
+            </a>
+            <a href="/dashboard" class="btn btn-outline-dark btn-lg px-4">
+                Enter Security Lab
+            </a>
+            <a href="/presentation" class="btn btn-outline-secondary btn-lg px-4">
+                View Presentation
+            </a>
+        </div>
+    </div>
+
+    <div class="row g-4 py-4">
+        <div class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">1. Assess</h5>
+                    <p class="card-text text-muted">
+                        Take the security assessment to get a personalized
+                        profile before you enter the lab.
+                    </p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">2. Attack &amp; Defend</h5>
+                    <p class="card-text text-muted">
+                        Toggle security layers on and off in the dashboard,
+                        then run the same attack against each configuration.
+                    </p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">3. Measure &amp; Compare</h5>
+                    <p class="card-text text-muted">
+                        See what each layer costs in performance, up to and
+                        including post-quantum cryptography.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="text-center py-4">
+        <h5 class="text-muted">Research Question</h5>
+        <p class="fst-italic">
+            "How does adding stronger security mechanisms, including
+            post-quantum cryptography, affect the security and performance
+            of a real-time web communication system?"
+        </p>
+    </div>
+
+</div>
+
+{% endblock %}

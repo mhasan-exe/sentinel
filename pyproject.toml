@@ -10,6 +10,8 @@ requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.141.1",
     "sqlmodel>=0.0.39",
+    "cryptography>=42.0.0",
+    "pqcrypto>=0.3.4",
 ]
 
 [project.scripts]

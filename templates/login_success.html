@@ -1,10 +1,29 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="container">
-    <h1>Login Successful</h1>
-    <p>Welcome!</p>
-    <a href="/users">View Users</a>
-    <a href="/protected">Visit Protection</a>
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-5">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-success text-white py-3">
+                    <h5 class="mb-0"><i class="bi bi-check-circle-fill me-2"></i>Logged in</h5>
+                </div>
+                <div class="card-body p-4">
+                    <p>Welcome back, <strong>{{ name }}</strong>.</p>
+                    <div class="d-grid gap-2">
+                        <a href="/dashboard" class="btn btn-primary">
+                            <i class="bi bi-speedometer2 me-1"></i> Security Dashboard
+                        </a>
+                        <a href="/chat" class="btn btn-outline-primary">
+                            <i class="bi bi-chat-dots-fill me-1"></i> Chat
+                        </a>
+                        <a href="/hackerview" class="btn btn-outline-dark">
+                            <i class="bi bi-eye-fill me-1"></i> Hacker Viewer
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
-    {% endblock %}
+{% endblock %}

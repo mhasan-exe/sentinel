@@ -1,0 +1,10 @@
+# Install these on the machine you'll actually demo/present from —
+# they're for gesture_slides.py only and are not needed to run the
+# FastAPI server itself.
+#
+#   pip install -r requirements-gesture.txt
+#
+cvzone
+opencv-python
+mediapipe
+pyautogui

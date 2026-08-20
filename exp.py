@@ -10,8 +10,6 @@ expire = datetime.now(timezone.utc) + timedelta(minutes=30)
 payload = {
     "sub": str(user_id),
     "exp": expire,
-    "your_number": "Ask_yo_mum",
-    "What?": "Did you say potential?"
 }
 key = jwt.encode(payload,SECRET_KEY,algorithm=ALGORITHM)
 token = key
