@@ -14,4 +14,5 @@ dependencies = [
     "python-multipart>=0.0.9",
     "cryptography>=42.0.0",
     "pqcrypto>=0.3.4",
+    "psycopg[binary]>=3.3.4",
 ]
