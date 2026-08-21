@@ -20,8 +20,8 @@ except ImportError:
     # just has to be set in the real environment instead of a .env file.
     pass
 
-from database import SessionLocal
-from models import User, SurveyResponse, ExperimentResult
+from database import Base, SessionLocal, engine
+from models import User, SurveyResponse, ExperimentResult, Message
 from security import (
     hash_password,
     verify_password,
@@ -49,6 +49,10 @@ from crypto_engine import (
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Create any tables added since the last deployment, including the chat table.
+# This is idempotent and works with the Neon DATABASE_URL on Vercel.
+Base.metadata.create_all(bind=engine)
 
 # Negative ids so anonymous/unauthenticated demo connections can never
 # collide with a real user's positive database id.
@@ -562,7 +566,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 "time": timestamp,
                 "client_msg_id": client_msg_id,
                 "security_mode": packet["security_mode"],
+                "execution": "real" if not SECURITY_CONFIG["input_validation"] else "blocked",
             }
+
+            db = SessionLocal()
+            try:
+                db.add(Message(
+                    sender_id=user_id,
+                    recipient_id=recipient_id,
+                    text=text,
+                    created_at=datetime.fromisoformat(timestamp),
+                ))
+                db.commit()
+            finally:
+                db.close()
 
             await manager.send_to_user(user_id, message)
             await manager.send_to_user(recipient_id, message)
@@ -726,8 +743,44 @@ def chat_page(
     return templates.TemplateResponse(
         request,
         "chat.html",
-        {"user_id": user.id}
+        {
+            "user_id": user.id,
+            "input_validation": SECURITY_CONFIG["input_validation"],
+        }
     )
+
+
+@app.get("/api/chat-users")
+def chat_users(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user),
+):
+    users = db.scalars(select(User).where(User.id != user_id).order_by(User.name)).all()
+    return [{"id": user.id, "name": user.name} for user in users]
+
+
+@app.get("/api/messages/{other_user_id}")
+def chat_history(
+    other_user_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user),
+):
+    rows = db.scalars(
+        select(Message).where(
+            ((Message.sender_id == user_id) & (Message.recipient_id == other_user_id))
+            | ((Message.sender_id == other_user_id) & (Message.recipient_id == user_id))
+        ).order_by(Message.created_at)
+    ).all()
+    return [
+        {
+            "userId": row.sender_id,
+            "recipient_id": row.recipient_id,
+            "text": row.text,
+            "time": row.created_at.isoformat(),
+            "security_mode": "HISTORY",
+        }
+        for row in rows
+    ]
 
 
 @app.get("/profile/{profile_id}")

@@ -1,337 +1,175 @@
 {% extends "layout.html" %}
 
 {% block content %}
-
 <style>
-@keyframes latencyPulse {
-    0%   { transform: scale(1);    box-shadow: 0 0 0 0 rgba(13,110,253,0.5); }
-    50%  { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(13,110,253,0); }
-    100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(13,110,253,0); }
-}
-.latency-badge-pulse {
-    animation: latencyPulse 0.5s ease-out;
-}
+    .chat-shell { height: calc(100vh - 150px); min-height: 520px; }
+    .chat-sidebar { border-right: 1px solid #dee2e6; overflow-y: auto; }
+    .chat-user { cursor: pointer; }
+    .chat-user.active { background: #e8f1ff; }
+    .chat-avatar { width: 42px; height: 42px; }
+    .chat-window { background: #efeae2; }
+    .chat-messages { overflow-y: auto; }
+    .message-bubble { max-width: 75%; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .message-in { background: #fff; }
+    .message-out { background: #d9fdd3; margin-left: auto; }
+    .chat-empty { color: #6c757d; }
 </style>
 
-<div class="container py-4">
-    <div class="row justify-content-center">
-        <div class="col-md-9 col-lg-8">
-
-            <div class="card shadow-sm border-0">
-
-                <div class="card-header bg-primary text-white py-3">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h5 class="mb-0">
-                                <i class="bi bi-chat-dots-fill me-2"></i>
-                                Sentinel Chat
-                            </h5>
-                            <small class="opacity-75">
-                                Secure communication channel
-                            </small>
-                        </div>
-
-                        <span id="connectionStatus"
-                            class="badge bg-warning text-dark">
-                            Connecting...
-                        </span>
+<div class="container-fluid px-0">
+    <div class="card shadow-sm chat-shell overflow-hidden">
+        <div class="row g-0 h-100">
+            <aside class="col-md-4 col-lg-3 chat-sidebar bg-white">
+                <div class="p-3 border-bottom">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <h1 class="h5 mb-0">Chats</h1>
+                        <span id="socketStatus" class="badge text-bg-secondary">Connecting</span>
                     </div>
-
-                    <div id="latencyBadges" class="mt-2 d-flex gap-2 flex-wrap">
-                        <!-- Populated live as real round-trip times come back per medium -->
-                    </div>
+                    <div class="small text-muted mt-1">Signed in as user {{ user_id }}</div>
                 </div>
-
-                <div class="card-body bg-light">
-
-                    <div class="mb-3">
-                        <label for="recipient" class="form-label fw-semibold">
-                            Recipient
-                        </label>
-
-                        <select id="recipient" class="form-select">
-                            <option value="1">User 1</option>
-                            <option value="2">User 2</option>
-                            <option value="3">User 3</option>
-                        </select>
-                    </div>
-
-                    <div id="messages"
-                        class="bg-white border rounded-3 p-3 overflow-auto"
-                        style="height: 450px;">
-                    </div>
-
+                <div id="userList" class="list-group list-group-flush">
+                    <div class="p-3 text-muted">Loading users...</div>
                 </div>
+            </aside>
 
-                <div class="card-footer bg-white p-3">
-
-                    <div class="input-group">
-
-                        <input
-                            id="messageInput"
-                            type="text"
-                            class="form-control"
-                            placeholder="Type your message..."
-                            autocomplete="off"
-                        >
-
-                        <button
-                            id="sendButton"
-                            class="btn btn-primary"
-                            type="button"
-                            onclick="sendMessage()"
-                        >
-                            <i class="bi bi-send-fill me-1"></i>
-                            Send
-                        </button>
-
-                    </div>
-
-                    <div class="text-muted small mt-2">
-                        Press Enter to send
-                    </div>
-
+            <section class="col-md-8 col-lg-9 d-flex flex-column chat-window">
+                <header id="chatHeader" class="bg-white border-bottom p-3">
+                    <div class="chat-empty">Select a user to open a chat</div>
+                </header>
+                <div id="messages" class="chat-messages flex-grow-1 p-3 d-flex flex-column gap-2">
+                    <div class="chat-empty text-center m-auto">Your conversations will appear here.</div>
                 </div>
-
-            </div>
-
+                <form id="messageForm" class="bg-white border-top p-3 d-flex gap-2" hidden>
+                    <input id="messageInput" class="form-control" autocomplete="off" placeholder="Type a message...">
+                    <button class="btn btn-primary" type="submit" aria-label="Send message">
+                        <i class="bi bi-send-fill"></i>
+                    </button>
+                </form>
+            </section>
         </div>
     </div>
 </div>
 
-
 <script>
+const currentUserId = {{ user_id }};
+const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+const userList = document.getElementById("userList");
+const messages = document.getElementById("messages");
+const chatHeader = document.getElementById("chatHeader");
+const messageForm = document.getElementById("messageForm");
+const messageInput = document.getElementById("messageInput");
+const socketStatus = document.getElementById("socketStatus");
+let selectedUser = null;
 
-const socketProtocol =
-    window.location.protocol === "https:" ? "wss:" : "ws:";
-
-const socket =
-    new WebSocket(`${socketProtocol}//${window.location.host}/ws`);
-
-const messagesContainer =
-    document.getElementById("messages");
-
-const messageInput =
-    document.getElementById("messageInput");
-
-const sendButton =
-    document.getElementById("sendButton");
-
-const connectionStatus =
-    document.getElementById("connectionStatus");
-
-const latencyBadges =
-    document.getElementById("latencyBadges");
-
-
-// REAL client-measured round trips, keyed by medium (security_mode the
-// server actually used for that message). No fabricated numbers here —
-// pendingSends tracks exactly when THIS browser sent each message, and
-// the round trip is only recorded once the server's own echo of that
-// same client_msg_id comes back.
-const pendingSends = {};       // client_msg_id -> performance.now() at send time
-const latencyByMedium = {};    // medium -> { count, totalMs, lastMs }
-
-function makeClientMsgId() {
-    return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+function formatTime(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function recordLatency(medium, rttMs) {
-    if (!latencyByMedium[medium]) {
-        latencyByMedium[medium] = { count: 0, totalMs: 0, lastMs: 0 };
-    }
-    const stats = latencyByMedium[medium];
-    stats.count += 1;
-    stats.totalMs += rttMs;
-    stats.lastMs = rttMs;
+function renderMessage(message) {
+    const outgoing = Number(message.userId) === currentUserId;
+    const row = document.createElement("div");
+    row.className = `message-bubble rounded-3 px-3 py-2 ${outgoing ? "message-out" : "message-in"}`;
 
-    renderLatencyBadges();
+    const text = document.createElement("div");
+    text.textContent = message.text;
+    row.appendChild(text);
 
-    if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-            type: "latency_report",
-            security_mode: medium,
-            rtt_ms: rttMs
-        }));
-    }
+    const meta = document.createElement("div");
+    meta.className = "small text-muted text-end mt-1";
+    meta.textContent = `${formatTime(message.time)}${message.security_mode ? ` · ${message.security_mode}` : ""}`;
+    row.appendChild(meta);
+    messages.appendChild(row);
+    messages.scrollTop = messages.scrollHeight;
 }
 
-function renderLatencyBadges() {
-    latencyBadges.innerHTML = "";
-
-    for (const [medium, stats] of Object.entries(latencyByMedium)) {
-        const avg = (stats.totalMs / stats.count).toFixed(2);
-
-        const badge = document.createElement("span");
-        badge.className = "badge bg-secondary latency-badge-pulse";
-        badge.textContent =
-            `${medium}: ${stats.lastMs.toFixed(2)}ms (avg ${avg}ms, n=${stats.count})`;
-
-        latencyBadges.appendChild(badge);
-    }
-}
-
-
-socket.onopen = function () {
-
-    connectionStatus.textContent = "Connected";
-    connectionStatus.className = "badge bg-success";
-
-};
-
-socket.onclose = function () {
-
-    connectionStatus.textContent = "Disconnected";
-    connectionStatus.className = "badge bg-danger";
-
-};
-
-
-socket.onerror = function () {
-
-    connectionStatus.textContent = "Connection Error";
-    connectionStatus.className = "badge bg-danger";
-
-};
-
-
-socket.onmessage = function (event) {
-
-    const data = JSON.parse(event.data);
-
-    const isMe =
-        String(data.userId) === String("{{ user_id }}");
-
-    // REAL round trip: this only fires once the SERVER echoes back the
-    // exact client_msg_id this browser generated when it sent — i.e.
-    // the message has genuinely gone client -> server -> (encrypt/sign
-    // if that medium is on) -> broadcast -> back to this client.
-    if (isMe && data.client_msg_id && pendingSends[data.client_msg_id] !== undefined) {
-        const rtt = performance.now() - pendingSends[data.client_msg_id];
-        delete pendingSends[data.client_msg_id];
-        recordLatency(data.security_mode || "UNKNOWN", rtt);
-    }
-
-    const messageRow =
-        document.createElement("div");
-
-    messageRow.className =
-        "d-flex mb-3 " +
-        (isMe
-            ? "justify-content-end"
-            : "justify-content-start");
-
-
-    const wrapper =
-        document.createElement("div");
-
-    wrapper.style.maxWidth = "75%";
-
-
-    const bubble =
-        document.createElement("div");
-
-    bubble.className =
-        isMe
-            ? "p-3 bg-primary text-white rounded-3 shadow-sm"
-            : "p-3 bg-white text-dark border rounded-3 shadow-sm";
-
-
-    /*
-        IMPORTANT:
-        textContent prevents received messages
-        from being interpreted as HTML.
-    */
-
-    bubble.textContent = data.text;
-
-
-    const metadata =
-        document.createElement("small");
-
-    metadata.className =
-        "text-muted d-block mt-1";
-
-
-    metadata.textContent =
-        `${data.time} · ` +
-        (isMe
-            ? "You"
-            : `User ${data.userId}`);
-
-
-    wrapper.appendChild(bubble);
-    wrapper.appendChild(metadata);
-
-    messageRow.appendChild(wrapper);
-
-    messagesContainer.appendChild(messageRow);
-
-    messagesContainer.scrollTop =
-        messagesContainer.scrollHeight;
-
-};
-
-
-function sendMessage() {
-
-    const text =
-        messageInput.value.trim();
-
-    const recipient =
-        document.getElementById("recipient").value;
-
-
-    if (!text) {
+function showMessages(history) {
+    messages.replaceChildren();
+    if (!history.length) {
+        const empty = document.createElement("div");
+        empty.className = "chat-empty text-center m-auto";
+        empty.textContent = "No messages yet. Say hello.";
+        messages.appendChild(empty);
         return;
     }
+    history.forEach(renderMessage);
+}
 
+async function openChat(user, element) {
+    selectedUser = user;
+    document.querySelectorAll(".chat-user").forEach(item => item.classList.remove("active"));
+    element.classList.add("active");
+    chatHeader.innerHTML = `<strong></strong><div class="small text-muted">Private conversation</div>`;
+    chatHeader.querySelector("strong").textContent = user.name;
+    messageForm.hidden = false;
+    messages.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "chat-empty text-center m-auto";
+    loading.textContent = "Loading messages...";
+    messages.appendChild(loading);
 
-    if (socket.readyState !== WebSocket.OPEN) {
-
-        alert("WebSocket is not connected.");
-
+    const response = await fetch(`/api/messages/${user.id}`);
+    if (!response.ok) {
+        loading.textContent = "Unable to load this conversation.";
         return;
     }
-
-
-    socket.send(JSON.stringify({
-
-        recipient_id: Number(recipient),
-
-        text: text,
-
-        client_msg_id: (function () {
-            const id = makeClientMsgId();
-            pendingSends[id] = performance.now();
-            return id;
-        })()
-
-    }));
-
-
-    messageInput.value = "";
-
+    showMessages(await response.json());
     messageInput.focus();
-
 }
 
-
-messageInput.addEventListener(
-    "keydown",
-    function (event) {
-
-        if (event.key === "Enter") {
-
-            event.preventDefault();
-
-            sendMessage();
-
-        }
-
+async function loadUsers() {
+    const response = await fetch("/api/chat-users");
+    if (!response.ok) {
+        userList.innerHTML = '<div class="p-3 text-danger">Unable to load users.</div>';
+        return;
     }
-);
+    const users = await response.json();
+    userList.replaceChildren();
+    if (!users.length) {
+        userList.innerHTML = '<div class="p-3 text-muted">No other users registered.</div>';
+        return;
+    }
+    users.forEach(user => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "chat-user list-group-item list-group-item-action d-flex align-items-center gap-3 p-3";
+        item.innerHTML = '<span class="chat-avatar rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center"><i class="bi bi-person-fill"></i></span><span class="fw-semibold"></span>';
+        item.querySelector(".fw-semibold").textContent = user.name;
+        item.addEventListener("click", () => openChat(user, item));
+        userList.appendChild(item);
+    });
+}
 
+socket.addEventListener("open", () => {
+    socketStatus.textContent = "Live";
+    socketStatus.className = "badge text-bg-success";
+});
+
+socket.addEventListener("close", () => {
+    socketStatus.textContent = "Offline";
+    socketStatus.className = "badge text-bg-danger";
+});
+
+socket.addEventListener("message", event => {
+    const message = JSON.parse(event.data);
+    if (!message.userId || !message.recipient_id || !selectedUser) return;
+    const belongsToChat = (Number(message.userId) === currentUserId && Number(message.recipient_id) === selectedUser.id)
+        || (Number(message.userId) === selectedUser.id && Number(message.recipient_id) === currentUserId);
+    if (belongsToChat) {
+        const empty = messages.querySelector(".chat-empty");
+        if (empty) messages.replaceChildren();
+        renderMessage(message);
+    }
+});
+
+messageForm.addEventListener("submit", event => {
+    event.preventDefault();
+    const text = messageInput.value.trim();
+    if (!text || !selectedUser || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ recipient_id: selectedUser.id, text, client_msg_id: crypto.randomUUID() }));
+    messageInput.value = "";
+});
+
+loadUsers();
 </script>
-
 {% endblock %}
