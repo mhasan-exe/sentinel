@@ -795,7 +795,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
     except WebSocketDisconnect:
-        manager.disconnect(user_id)
+        manager.disconnect(user_id, websocket)
 
 
 @app.websocket("/ws/viewer")

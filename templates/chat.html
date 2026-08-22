@@ -74,7 +74,8 @@
 <script>
 const currentUserId = {{ user_id }};
 const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+let socket = null;
+let reconnectDelay = 1000;
 const userList = document.getElementById("userList");
 const messages = document.getElementById("messages");
 const chatHeader = document.getElementById("chatHeader");
@@ -86,6 +87,7 @@ const sessionRecoveryMessage = document.getElementById("sessionRecoveryMessage")
 const liveSecurityMode = document.getElementById("liveSecurityMode");
 let selectedUser = null;
 let sessionValid = true;
+let renderedMessageKeys = new Set();
 
 function showSessionRecovery(message) {
     sessionValid = false;
@@ -130,6 +132,9 @@ function formatTime(value) {
 }
 
 function renderMessage(message, allowUnsafe = false) {
+    const messageKey = message.client_msg_id || `${message.userId}:${message.recipient_id}:${message.time}:${message.text}`;
+    if (renderedMessageKeys.has(messageKey)) return;
+    renderedMessageKeys.add(messageKey);
     const outgoing = Number(message.userId) === currentUserId;
     const row = document.createElement("div");
     row.className = `message-bubble rounded-3 px-3 py-2 ${outgoing ? "message-out" : "message-in"}`;
@@ -171,6 +176,7 @@ function scrollMessagesToBottom() {
 
 function showMessages(history) {
     messages.replaceChildren();
+    renderedMessageKeys = new Set();
     if (!history.length) {
         const empty = document.createElement("div");
         empty.className = "chat-empty text-center m-auto";
@@ -206,6 +212,19 @@ async function openChat(user, element) {
     messageInput.focus();
 }
 
+async function syncSelectedChat() {
+    if (!selectedUser || !sessionValid) return;
+    try {
+        const response = await fetch(`/api/messages/${selectedUser.id}`, { credentials: "same-origin" });
+        if (!response.ok) return;
+        const history = await response.json();
+        history.forEach(renderMessage);
+        scrollMessagesToBottom();
+    } catch (error) {
+        // The WebSocket remains the primary live path; polling recovers missed frames.
+    }
+}
+
 async function loadUsers() {
     const response = await fetch("/api/chat-users");
     if (!response.ok) {
@@ -229,20 +248,7 @@ async function loadUsers() {
     });
 }
 
-socket.addEventListener("open", () => {
-    socketStatus.textContent = "Live";
-    socketStatus.className = "badge text-bg-success";
-});
-
-socket.addEventListener("close", event => {
-    socketStatus.textContent = "Offline";
-    socketStatus.className = "badge text-bg-danger";
-    if (event.code === 1008 || event.code === 4001) {
-        showSessionRecovery("Your login session is expired or unavailable. Please log in again.");
-    }
-});
-
-socket.addEventListener("message", event => {
+function handleSocketMessage(event) {
     const message = JSON.parse(event.data);
     if (message.type === "security_config") {
         renderLiveSecurity(message.config);
@@ -265,7 +271,30 @@ socket.addEventListener("message", event => {
         if (empty) messages.replaceChildren();
         renderMessage(message, true);
     }
-});
+}
+
+function connectSocket() {
+    socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    socket.addEventListener("open", () => {
+        reconnectDelay = 1000;
+        socketStatus.textContent = "Live";
+        socketStatus.className = "badge text-bg-success";
+        syncSelectedChat();
+    });
+    socket.addEventListener("message", handleSocketMessage);
+    socket.addEventListener("close", event => {
+        socketStatus.textContent = "Reconnecting...";
+        socketStatus.className = "badge text-bg-warning text-dark";
+        if (event.code === 1008 || event.code === 4001) {
+            showSessionRecovery("Your login session is expired or unavailable. Please log in again.");
+            return;
+        }
+        setTimeout(connectSocket, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+    });
+}
+
+connectSocket();
 
 messageForm.addEventListener("submit", async event => {
     event.preventDefault();
@@ -277,6 +306,7 @@ messageForm.addEventListener("submit", async event => {
 });
 
 loadUsers();
+setInterval(syncSelectedChat, 2000);
 setInterval(checkSession, 2000);
 </script>
 {% endblock %}

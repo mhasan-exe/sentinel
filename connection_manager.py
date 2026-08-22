@@ -3,7 +3,7 @@ from fastapi import WebSocket
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: dict[int, WebSocket] = {}
+        self.active_connections: dict[int, set[WebSocket]] = {}
         self.viewer_connections: list[WebSocket] = []
         self.dashboard_connections: list[WebSocket] = []
 
@@ -36,19 +36,27 @@ class ConnectionManager:
 
     async def connect(self, user_id: int, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections[user_id] = websocket
+        self.active_connections.setdefault(user_id, set()).add(websocket)
 
-    def disconnect(self, user_id: int):
-        self.active_connections.pop(user_id, None)
+    def disconnect(self, user_id: int, websocket: WebSocket | None = None):
+        sockets = self.active_connections.get(user_id)
+        if sockets is not None:
+            if websocket is None:
+                sockets.clear()
+            else:
+                sockets.discard(websocket)
+            if sockets:
+                return
+            self.active_connections.pop(user_id, None)
         self.session_crypto.pop(user_id, None)
         self.last_message_seal.pop(user_id, None)
         self.last_message_signer_pub.pop(user_id, None)
         self.seen_nonces.pop(user_id, None)
 
     async def send_to_user(self, user_id: int, message: dict):
-        websocket = self.active_connections.get(user_id)
-
-        if websocket:
+        sockets = self.active_connections.get(user_id, set())
+        dead = []
+        for websocket in sockets:
             try:
                 await websocket.send_json(message)
             except Exception:
@@ -59,7 +67,9 @@ class ConnectionManager:
                 # send_to_user. This was a real, if intermittent, cause
                 # of "the whole chat connection just dropped" reports:
                 # one dead recipient socket could crash the sender's turn.
-                self.active_connections.pop(user_id, None)
+                dead.append(websocket)
+        for websocket in dead:
+            self.disconnect(user_id, websocket)
 
     async def connect_viewer(self, websocket: WebSocket):
         await websocket.accept()
@@ -125,7 +135,12 @@ class ConnectionManager:
 
     async def send_security_config(self, config: dict):
         message = {"type": "security_config", "config": config}
-        await self._send_to_connections(self.active_connections.values(), message)
+        chat_connections = [
+            websocket
+            for sockets in self.active_connections.values()
+            for websocket in sockets
+        ]
+        await self._send_to_connections(chat_connections, message)
         await self._send_to_connections(self.viewer_connections, message)
         await self._send_to_connections(self.dashboard_connections, message)
 
