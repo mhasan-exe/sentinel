@@ -1,0 +1,98 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Live Database Leak</h1>
+            <p class="text-muted mb-0">Real users table data exposed by the attack demonstration.</p>
+        </div>
+        <span id="refreshStatus" class="badge text-bg-secondary">Loading...</span>
+    </div>
+
+    <div id="leakNotice" class="alert alert-warning">Loading current database rows...</div>
+
+    <form id="testAccountForm" class="row g-2 mb-3">
+        <div class="col-md-4"><input name="name" class="form-control" placeholder="Demo account name" required></div>
+        <div class="col-md-4"><input name="password" class="form-control" placeholder="Demo password" required></div>
+        <div class="col-md-4"><button class="btn btn-danger w-100" type="submit">Create Test Account</button></div>
+    </form>
+
+    <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Stored password value</th>
+                    <th>Exposure</th>
+                </tr>
+            </thead>
+            <tbody id="leakRows">
+                <tr><td colspan="5" class="text-muted">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+const leakRows = document.getElementById("leakRows");
+const leakNotice = document.getElementById("leakNotice");
+const refreshStatus = document.getElementById("refreshStatus");
+const testAccountForm = document.getElementById("testAccountForm");
+
+async function loadLeakData() {
+    try {
+        const response = await fetch("/api/database-leak", { credentials: "same-origin" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        leakRows.replaceChildren();
+        if (!data.rows.length) {
+            leakRows.innerHTML = '<tr><td colspan="5" class="text-muted">No users found.</td></tr>';
+        } else {
+            data.rows.forEach(row => {
+                const tr = document.createElement("tr");
+                const values = [row.id, row.name, row.email, row.stored_password];
+                values.forEach(value => {
+                    const td = document.createElement("td");
+                    td.textContent = value;
+                    tr.appendChild(td);
+                });
+                const exposure = document.createElement("td");
+                exposure.innerHTML = row.plaintext
+                    ? '<span class="badge text-bg-danger">PLAINTEXT</span>'
+                    : '<span class="badge text-bg-success">HASHED</span>';
+                tr.appendChild(exposure);
+                leakRows.appendChild(tr);
+            });
+        }
+        leakNotice.textContent = data.password_hashing
+            ? "Password hashing is ON: stored values are hashes."
+            : "Password hashing is OFF: stored values are exposed plaintext credentials.";
+        leakNotice.className = data.password_hashing ? "alert alert-success" : "alert alert-danger";
+        refreshStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        refreshStatus.className = "badge text-bg-success";
+    } catch (error) {
+        refreshStatus.textContent = "Update failed";
+        refreshStatus.className = "badge text-bg-danger";
+    }
+}
+
+testAccountForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const response = await fetch("/api/database-leak/test-account", {
+        method: "POST",
+        body: new FormData(testAccountForm),
+        credentials: "same-origin",
+    });
+    if (response.ok) {
+        testAccountForm.reset();
+        loadLeakData();
+    }
+});
+
+loadLeakData();
+setInterval(loadLeakData, 2000);
+</script>
+{% endblock %}

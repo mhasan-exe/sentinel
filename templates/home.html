@@ -14,6 +14,11 @@
         </p>
 
         <div class="d-flex justify-content-center gap-3 flex-wrap">
+            {% if user_id %}
+            <a href="/chat" class="btn btn-primary btn-lg px-4">
+                Open Chat
+            </a>
+            {% endif %}
             <a href="/assessment" class="btn btn-primary btn-lg px-4">
                 Take Security Assessment
             </a>

@@ -68,7 +68,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    return password_hash.verify(password, hashed_password)
+    if hashed_password.startswith(("$argon2", "$scrypt", "$bcrypt")):
+        return password_hash.verify(password, hashed_password)
+    # Accounts created with password_hashing OFF intentionally contain the
+    # raw value for the live database-leak demonstration.
+    return password == hashed_password
 
 def create_access_token(user_id: int):
     expire = datetime.now(timezone.utc) + timedelta(minutes=30)

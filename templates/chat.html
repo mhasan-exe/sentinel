@@ -129,19 +129,36 @@ function formatTime(value) {
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function renderMessage(message) {
+function renderMessage(message, allowUnsafe = false) {
     const outgoing = Number(message.userId) === currentUserId;
     const row = document.createElement("div");
     row.className = `message-bubble rounded-3 px-3 py-2 ${outgoing ? "message-out" : "message-in"}`;
 
     const text = document.createElement("div");
-    text.textContent = message.text;
+    if (allowUnsafe && message.execution === "real") {
+        text.innerHTML = message.text;
+    } else {
+        text.textContent = message.text;
+    }
     row.appendChild(text);
 
     const meta = document.createElement("div");
     meta.className = "small text-muted text-end mt-1";
     meta.textContent = `${formatTime(message.time)}${message.security_mode ? ` · ${message.security_mode}` : ""}`;
     row.appendChild(meta);
+    messages.appendChild(row);
+    scrollMessagesToBottom();
+}
+
+function renderInterceptStatus(message) {
+    const row = document.createElement("div");
+    row.className = "message-bubble message-in border border-warning px-3 py-2";
+    const text = document.createElement("div");
+    text.textContent = message.message;
+    const meta = document.createElement("div");
+    meta.className = "small text-muted text-end mt-1";
+    meta.textContent = `Hacker View · ${message.status}`;
+    row.append(text, meta);
     messages.appendChild(row);
     scrollMessagesToBottom();
 }
@@ -236,13 +253,17 @@ socket.addEventListener("message", event => {
         showSessionRecovery(message.message);
         return;
     }
+    if (message.type === "message_intercept_status") {
+        renderInterceptStatus(message);
+        return;
+    }
     if (!message.userId || !message.recipient_id || !selectedUser) return;
     const belongsToChat = (Number(message.userId) === currentUserId && Number(message.recipient_id) === selectedUser.id)
         || (Number(message.userId) === selectedUser.id && Number(message.recipient_id) === currentUserId);
     if (belongsToChat) {
         const empty = messages.querySelector(".chat-empty");
         if (empty) messages.replaceChildren();
-        renderMessage(message);
+        renderMessage(message, true);
     }
 });
 

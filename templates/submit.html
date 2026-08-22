@@ -11,8 +11,12 @@
                 <div class="card-body p-4">
                     <p>Welcome, <strong>{{ name }}</strong> — your Sentinel account is ready.</p>
                     <p class="text-muted small">
-                        Signed up with <strong>{{ email }}</strong>. Your password was hashed
-                        with Argon2id before it was ever written to the database.
+                        Signed up with <strong>{{ email }}</strong>.
+                        {% if password_hashing %}
+                        Your password was hashed with Argon2id before storage.
+                        {% else %}
+                        Password hashing is currently off for the live security demonstration.
+                        {% endif %}
                     </p>
                     <a href="/login" class="btn btn-primary w-100">
                         <i class="bi bi-box-arrow-in-right me-1"></i> Log in now

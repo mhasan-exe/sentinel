@@ -32,6 +32,8 @@ from security_config import SECURITY_CONFIG
 from security_events import create_security_event
 from connection_manager import manager
 from crypto_engine import verify_seal
+from database import SessionLocal
+from models import User
 
 
 class SecurityEngine:
@@ -227,22 +229,31 @@ class SecurityEngine:
         )
 
     def database_leak_simulation(self, source=None):
-        demo_row = (
-            "id=999, name='demo_user', email='demo@sentinel.local', "
-            "password_hash='$argon2id$v=19$m=65536,t=3,p=4$...(truncated demo hash)...'"
-        )
+        db = SessionLocal()
+        try:
+            users = db.query(User).order_by(User.id).limit(5).all()
+            row_count = db.query(User).count()
+            leaked_rows = "; ".join(
+                f"id={user.id}, email={user.email!r}, password={user.password_hash!r}"
+                for user in users
+            ) or "(users table is empty)"
+        finally:
+            db.close()
 
         if SECURITY_CONFIG["password_hashing"]:
             status = "BLOCKED"
             message = (
-                f"Simulated leaked row: {demo_row}. "
+                f"Real database query returned {row_count} user row(s): {leaked_rows}. "
                 "The stored value is an Argon2id hash, not the plaintext "
                 "password, so a leaked database row does not directly "
                 "expose the credential."
             )
         else:
             status = "VULNERABLE"
-            message = "Password hashing is OFF — leaked rows would expose recoverable credentials."
+            message = (
+                f"Real database query returned {row_count} user row(s): {leaked_rows}. "
+                "Password hashing is OFF, so the leaked rows expose recoverable credentials."
+            )
 
         return create_security_event(
             event_type="DATABASE_LEAK_SIMULATION",

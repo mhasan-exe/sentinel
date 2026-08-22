@@ -755,6 +755,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "message_intercepted",
                         "intercept": _public_interception(entry),
                     })
+                    await manager.send_to_user(user_id, {
+                        "type": "message_intercept_status",
+                        "status": "PAUSED",
+                        "message": "Message paused by Hacker View interception.",
+                        "time": entry["created_at"],
+                    })
                     continue
 
                 try:
@@ -1017,7 +1023,19 @@ async def dashboard_websocket(websocket: WebSocket):
                                 message=release_message,
                                 source=entry["sender_id"],
                             ))
+                            await manager.send_to_user(entry["sender_id"], {
+                                "type": "message_intercept_status",
+                                "status": "RELEASED",
+                                "message": "Message released by Hacker View.",
+                                "time": datetime.now(timezone.utc).isoformat(),
+                            })
                         except Exception as exc:
+                            await manager.send_to_user(entry["sender_id"], {
+                                "type": "message_intercept_status",
+                                "status": "FAILED",
+                                "message": f"Message could not be released: {exc}",
+                                "time": datetime.now(timezone.utc).isoformat(),
+                            })
                             await manager.send_security_event(create_security_event(
                                 event_type="MESSAGE_RELEASE_FAILED",
                                 status="WARNING",
@@ -1054,6 +1072,12 @@ async def dashboard_websocket(websocket: WebSocket):
                             ),
                             source=entry["sender_id"],
                         ))
+                        await manager.send_to_user(entry["sender_id"], {
+                            "type": "message_intercept_status",
+                            "status": "DROPPED",
+                            "message": "Message dropped by Hacker View.",
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        })
                         await manager.send_to_dashboards({
                             "type": "message_intercept_resolved",
                             "intercept_id": intercept_id,
@@ -1096,6 +1120,12 @@ async def dashboard_websocket(websocket: WebSocket):
                             ),
                             source=entry["sender_id"],
                         ))
+                        await manager.send_to_user(entry["sender_id"], {
+                            "type": "message_intercept_status",
+                            "status": "MODIFIED",
+                            "message": "Message modified by Hacker View and is still paused.",
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        })
                         await manager.send_to_dashboards({
                             "type": "message_intercept_updated",
                             "intercept": _public_interception(entry),
@@ -1121,7 +1151,10 @@ def register_page(request: Request, user_id: int | None = Depends(get_current_us
     return templates.TemplateResponse(
         request,
         "register.html",
-        {"user_id": user_id}
+        {
+            "user_id": user_id,
+            "password_hashing": SECURITY_CONFIG["password_hashing"],
+        }
     )
 
 @app.get("/chat")
@@ -1217,28 +1250,32 @@ def submit_post(
     password: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    password = hash_password(password)
+    stored_password = (
+        hash_password(password)
+        if SECURITY_CONFIG["password_hashing"]
+        else password
+    )
 
     user = User(
         name=name,
         email=email,
-        password_hash=password
+        password_hash=stored_password
     )
 
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    return templates.TemplateResponse(
-        request,
-        "submit.html",
-        {
-            "name": name,
-            "email": email,
-            "password_hash": user.password_hash,
-            "id": user.id
-        }
+    response = RedirectResponse(url="/", status_code=303)
+    token = create_access_token(user.id)
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {token}",
+        httponly=True,
+        path="/",
+        samesite="lax",
     )
+    return response
 
 
 @app.get("/users")
@@ -1310,14 +1347,7 @@ def login_post(
     if user and verify_password(password, user.password_hash):
         token = create_access_token(user.id)
 
-        response = templates.TemplateResponse(
-            request,
-            "login_success.html",
-            {
-                "name": user.name,
-                "email": user.email
-            }
-        )
+        response = RedirectResponse(url="/", status_code=303)
 
         response.set_cookie(
             key="access_token",
@@ -1380,3 +1410,55 @@ def dashboard(
         "dashboard.html",
         {"user_id": user.id}
     )
+
+
+@app.get("/hackerview/database-leak")
+def database_leak_page(
+    request: Request,
+    user_id: int = Depends(get_current_user),
+):
+    return templates.TemplateResponse(
+        request,
+        "database_leak.html",
+        {"user_id": user_id},
+    )
+
+
+@app.get("/api/database-leak")
+def database_leak_data(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user),
+):
+    users = db.scalars(select(User).order_by(User.id)).all()
+    return {
+        "rows": [
+            {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "stored_password": user.password_hash,
+                "plaintext": not user.password_hash.startswith(("$argon2", "$scrypt", "$bcrypt")),
+            }
+            for user in users
+        ],
+        "password_hashing": SECURITY_CONFIG["password_hashing"],
+    }
+
+
+@app.post("/api/database-leak/test-account")
+def create_leak_test_account(
+    name: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user),
+):
+    email = f"leak-demo-{uuid.uuid4().hex[:8]}@sentinel.local"
+    stored_password = (
+        hash_password(password)
+        if SECURITY_CONFIG["password_hashing"]
+        else password
+    )
+    user = User(name=name, email=email, password_hash=stored_password)
+    db.add(user)
+    db.commit()
+    return {"id": user.id, "email": email}
