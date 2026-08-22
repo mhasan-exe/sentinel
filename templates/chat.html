@@ -132,7 +132,7 @@ function formatTime(value) {
 }
 
 function renderMessage(message, allowUnsafe = false) {
-    const messageKey = message.client_msg_id || `${message.userId}:${message.recipient_id}:${message.time}:${message.text}`;
+    const messageKey = message.message_id || message.client_msg_id || `${message.userId}:${message.recipient_id}:${message.time}:${message.text}`;
     if (renderedMessageKeys.has(messageKey)) return;
     renderedMessageKeys.add(messageKey);
     const outgoing = Number(message.userId) === currentUserId;

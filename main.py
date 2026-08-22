@@ -420,27 +420,30 @@ async def _deliver_chat_message(sender_id: int, recipient_id: int, text: str, cl
     elif SECURITY_CONFIG["encryption"] and session is None:
         packet["security_mode"] = "ENCRYPTION ON — NO SESSION KEY (enable TLS or ML-KEM first)"
 
+    db = SessionLocal()
+    try:
+        stored_message = Message(
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            text=text,
+            created_at=datetime.fromisoformat(timestamp),
+        )
+        db.add(stored_message)
+        db.commit()
+        db.refresh(stored_message)
+    finally:
+        db.close()
+
     message = {
         "userId": sender_id,
         "recipient_id": recipient_id,
+        "message_id": stored_message.id,
         "text": text,
         "time": timestamp,
         "client_msg_id": client_msg_id,
         "security_mode": packet["security_mode"],
         "execution": "real" if not SECURITY_CONFIG["input_validation"] else "blocked",
     }
-
-    db = SessionLocal()
-    try:
-        db.add(Message(
-            sender_id=sender_id,
-            recipient_id=recipient_id,
-            text=text,
-            created_at=datetime.fromisoformat(timestamp),
-        ))
-        db.commit()
-    finally:
-        db.close()
 
     await manager.send_to_user(sender_id, message)
     await manager.send_to_user(recipient_id, message)
@@ -1210,6 +1213,7 @@ def chat_history(
         {
             "userId": row.sender_id,
             "recipient_id": row.recipient_id,
+            "message_id": row.id,
             "text": row.text,
             "time": row.created_at.isoformat(),
             "security_mode": "HISTORY",
