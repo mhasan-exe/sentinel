@@ -25,6 +25,9 @@
     </div>
 
 
+    <div id="pqcStatusBanner"></div>
+
+
     <div class="row g-3 mb-4" id="statCards">
 
         <div class="col-6 col-lg-3">
@@ -140,9 +143,21 @@
                     </button>
 
                     <button
-                        class="btn btn-outline-danger w-100"
+                        class="btn btn-outline-danger w-100 mb-2"
                         onclick="runAttack('MESSAGE_TAMPERING')">
                         Message Tampering
+                    </button>
+
+                    <button
+                        class="btn btn-outline-danger w-100 mb-2"
+                        onclick="runAttack('JWT_TAMPERING')">
+                        JWT Tampering
+                    </button>
+
+                    <button
+                        class="btn btn-outline-danger w-100"
+                        onclick="runAttack('DATABASE_LEAK_SIMULATION')">
+                        Database Leak Simulation
                     </button>
 
                 </div>
@@ -305,6 +320,33 @@ const protocol =
     window.location.protocol === "https:"
         ? "wss:"
         : "ws:";
+
+// Persistent PQC availability banner — fetched once on page load, not
+// just after a benchmark run, so it's visible immediately even if you
+// never click Run Benchmark. Shows the REAL import error when PQC
+// isn't available, not a generic "not installed" guess.
+(async function loadPqcStatus() {
+    try {
+        const res = await fetch("/api/pqc-status");
+        const data = await res.json();
+        const banner = document.getElementById("pqcStatusBanner");
+        if (data.pqc_available) {
+            banner.innerHTML = `<div class="alert alert-success py-2 small mb-4">
+                <i class="bi bi-check-circle me-1"></i>
+                ML-KEM-768 / ML-DSA-65 available (${data.pqc_module_names}).
+            </div>`;
+        } else {
+            banner.innerHTML = `<div class="alert alert-warning py-2 small mb-4">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                pqcrypto unavailable — PQC handshakes will fall back to classical.
+                <code>${data.pqc_import_error || "unknown import error"}</code>
+            </div>`;
+        }
+    } catch (e) {
+        // Non-fatal — the rest of the dashboard still works without this banner.
+    }
+})();
+
 
 const socket =
     new WebSocket(
@@ -676,7 +718,7 @@ function renderBenchmarkFinal(session) {
 
     const pqcNote = session.pqc_available
         ? ""
-        : `<div class="alert alert-warning">ML-KEM/ML-DSA skipped — <code>pqcrypto</code> is unavailable to the server. Check the Python environment and import compatibility.</div>`;
+        : `<div class="alert alert-warning">ML-KEM/ML-DSA skipped — pqcrypto unavailable: <code>${session.pqc_import_error || "unknown import error"}</code></div>`;
 
     const realHandshakeNote = session.real_ws_handshakes_captured > 0
         ? `<div class="alert alert-success">Captured ${session.real_ws_handshakes_captured} real <code>/ws</code> connection handshake(s) during this window, averaging ${session.real_ws_handshake_avg_ms}ms.</div>`

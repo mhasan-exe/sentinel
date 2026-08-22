@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Request, Form, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Form, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -33,7 +33,7 @@ from security import (
 )
 from connection_manager import manager
 from security_events import create_security_event
-from security_config import SECURITY_CONFIG
+from security_config import SECURITY_CONFIG, save_security_config
 from security_engine import security_engine
 from security_survey import (
     QUESTIONS,
@@ -48,11 +48,25 @@ from crypto_engine import (
     run_resumption_benchmark,
     SESSION_CACHE,
     PQC_AVAILABLE,
+    PQC_IMPORT_ERROR,
+    PQC_MODULE_NAMES,
 )
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.exception_handler(HTTPException)
+async def handle_http_exception(request: Request, exc: HTTPException):
+    accepts_html = "text/html" in request.headers.get("accept", "")
+    if exc.status_code == 401 and accepts_html and request.url.path != "/login":
+        return RedirectResponse(url="/login", status_code=303)
+    return JSONResponse(
+        content={"detail": exc.detail},
+        status_code=exc.status_code,
+        headers=exc.headers,
+    )
 
 # Create any tables added since the last deployment, including the chat table.
 # This is idempotent and works with the Neon DATABASE_URL on Vercel.
@@ -187,6 +201,7 @@ async def run_benchmark_session(session_id: str, duration_seconds: int):
             "pqc_iterations": len(pqc_timings),
             "pqc_avg_ms": round(sum(pqc_timings) / len(pqc_timings), 3) if pqc_timings else None,
             "pqc_available": PQC_AVAILABLE,
+            "pqc_import_error": PQC_IMPORT_ERROR,
             "real_ws_handshakes_captured": real_count,
             "real_ws_handshake_avg_ms": real_avg,
             "real_message_latency_by_medium": latency_by_medium,
@@ -347,12 +362,136 @@ def experiment_history(
 
 @app.get("/api/pqc-status")
 def pqc_status():
-    from crypto_engine import PQC_IMPORT_ERROR
-
     return {
         "pqc_available": PQC_AVAILABLE,
-        "error": PQC_IMPORT_ERROR,
+        "pqc_import_error": PQC_IMPORT_ERROR,
+        "pqc_module_names": PQC_MODULE_NAMES,
     }
+
+
+async def _deliver_chat_message(sender_id: int, recipient_id: int, text: str, client_msg_id):
+    """
+    The actual send: seal (if configured), persist, and fan out to the
+    recipient + viewers. Shared by both the normal (no interception)
+    path and the Hacker View RELEASE_MESSAGE command, so a released
+    message — modified or not — goes through the exact same real
+    encryption/signing/delivery code as an ordinary message. Nothing
+    about "what happens on release" is faked or shortcut.
+
+    Lets exceptions from seal_message propagate to the caller — the two
+    callers (the sender's own /ws loop vs. an attacker's RELEASE
+    command) need to handle a corrupt session key differently, so this
+    function doesn't decide that for them.
+    """
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    packet = {
+        "timestamp": timestamp,
+        "source": sender_id,
+        "destination": recipient_id,
+        "message": text,
+        "size": len(text.encode("utf-8")),
+        "security_mode": "PLAINTEXT"
+    }
+
+    session = manager.session_crypto.get(sender_id)
+
+    if SECURITY_CONFIG["encryption"] and session is not None:
+        seal = seal_message(
+            text.encode("utf-8"),
+            session.session_key,
+            sign=SECURITY_CONFIG["message_integrity"],
+            use_pqc_signature=SECURITY_CONFIG["ml_dsa"],
+        )
+        manager.last_message_seal[sender_id] = seal
+        manager.seen_nonces.setdefault(sender_id, set()).add(seal.nonce)
+
+        packet["message"] = base64.b64encode(seal.ciphertext).decode("ascii")
+        packet["nonce"] = base64.b64encode(seal.nonce).decode("ascii")
+        packet["security_mode"] = (
+            f"ENCRYPTED ({seal.algorithm}; key exchange: {session.kem_algorithm}; "
+            f"signature: {session.sig_algorithm})"
+        )
+        packet["size"] = len(seal.ciphertext)
+        if seal.signature:
+            packet["signed"] = True
+            packet["sig_algorithm"] = seal.sig_algorithm
+            packet["signature_size"] = len(seal.signature)
+    elif SECURITY_CONFIG["encryption"] and session is None:
+        packet["security_mode"] = "ENCRYPTION ON — NO SESSION KEY (enable TLS or ML-KEM first)"
+
+    message = {
+        "userId": sender_id,
+        "recipient_id": recipient_id,
+        "text": text,
+        "time": timestamp,
+        "client_msg_id": client_msg_id,
+        "security_mode": packet["security_mode"],
+        "execution": "real" if not SECURITY_CONFIG["input_validation"] else "blocked",
+    }
+
+    db = SessionLocal()
+    try:
+        db.add(Message(
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            text=text,
+            created_at=datetime.fromisoformat(timestamp),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    await manager.send_to_user(sender_id, message)
+    await manager.send_to_user(recipient_id, message)
+
+    await manager.send_to_viewers(packet)
+
+
+def _public_interception(entry: dict) -> dict:
+    """Return the interception record without exposing plaintext to Hacker View."""
+    public_entry = {
+        key: value
+        for key, value in entry.items()
+        if key not in {"original_text", "current_text"}
+    }
+    if entry.get("encrypted"):
+        public_entry["original_text"] = entry["encrypted_original_text"]
+        public_entry["current_text"] = entry["encrypted_current_text"]
+        public_entry["editable"] = False
+    else:
+        public_entry["original_text"] = entry["original_text"]
+        public_entry["current_text"] = entry["current_text"]
+        public_entry["editable"] = True
+    return public_entry
+
+
+def _encrypted_interception_text(user_id: int, text: str) -> str | None:
+    session = manager.session_crypto.get(user_id)
+    if not SECURITY_CONFIG["encryption"]:
+        return None
+    if session is None:
+        return "[encrypted payload unavailable: no session key]"
+    seal = seal_message(text.encode("utf-8"), session.session_key)
+    return "AES-256-GCM:" + base64.b64encode(seal.ciphertext).decode("ascii")
+
+
+def _refresh_live_crypto_sessions() -> None:
+    """Apply the current handshake mode to chat sockets already connected."""
+    for user_id in list(manager.active_connections):
+        SESSION_CACHE.invalidate(user_id)
+        if SECURITY_CONFIG["tls"] or SECURITY_CONFIG["ml_kem"]:
+            try:
+                handshake, _, _ = resume_or_handshake(
+                    user_id,
+                    use_pqc=SECURITY_CONFIG["ml_kem"],
+                    allow_resume=False,
+                )
+                manager.session_crypto[user_id] = handshake
+            except Exception:
+                manager.session_crypto.pop(user_id, None)
+        else:
+            manager.session_crypto.pop(user_id, None)
 
 
 @app.websocket("/ws")
@@ -361,6 +500,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     if not token:
         if SECURITY_CONFIG["websocket_authentication"]:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "session_key_corrupt",
+                "message": "No active login session was found. Please log in again.",
+                "login_url": "/login",
+            })
             event = create_security_event(
                 event_type="UNAUTHORIZED_WEBSOCKET",
                 status="BLOCKED",
@@ -390,6 +535,12 @@ async def websocket_endpoint(websocket: WebSocket):
             user_id = int(payload["sub"])
         except Exception:
             if SECURITY_CONFIG["jwt_authentication"]:
+                await websocket.accept()
+                await websocket.send_json({
+                    "type": "session_key_corrupt",
+                    "message": "Your login session is expired or corrupt. Please log in again.",
+                    "login_url": "/login",
+                })
                 event = create_security_event(
                     event_type="INVALID_JWT",
                     status="BLOCKED",
@@ -419,6 +570,11 @@ async def websocket_endpoint(websocket: WebSocket):
             await manager.send_security_event(event)
 
     await manager.connect(user_id, websocket)
+
+    await websocket.send_json({
+        "type": "security_config",
+        "config": SECURITY_CONFIG,
+    })
 
     # ------------------------------------------------------------------
     # REAL handshake — runs an actual X25519+Ed25519 (classical/"tls")
@@ -494,126 +650,143 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_json()
-
-            # ------------------------------------------------------------------
-            # REAL per-medium chat latency. The client measures its own
-            # full round trip (send -> server -> echoed back) on its own
-            # clock, so there's no cross-machine clock-skew problem, and
-            # reports it here tagged with which medium actually carried
-            # that message (PLAINTEXT vs ENCRYPTED, from the real packet
-            # this server built when it sent it — see below).
-            # ------------------------------------------------------------------
-            if data.get("type") == "latency_report":
-                rtt_ms = data.get("rtt_ms")
-                security_mode = data.get("security_mode", "UNKNOWN")
-
-                if isinstance(rtt_ms, (int, float)) and rtt_ms >= 0:
-                    db = SessionLocal()
-                    try:
-                        db.add(ExperimentResult(
-                            experiment_type="MESSAGE_LATENCY",
-                            configuration=security_mode,
-                            result="MEASURED",
-                            latency_ms=float(rtt_ms),
-                            detail_json=json.dumps({
-                                "client_msg_id": data.get("client_msg_id"),
-                                "security_mode": security_mode,
-                                "user_id": user_id,
-                            }),
-                            session_id=_current_benchmark_session_id(),
-                        ))
-                        db.commit()
-                    finally:
-                        db.close()
-
-                    await manager.send_to_dashboards({
-                        "type": "message_latency",
-                        "user_id": user_id,
-                        "security_mode": security_mode,
-                        "rtt_ms": rtt_ms,
-                    })
-
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                # A frame that isn't valid JSON (or isn't a dict) used to
+                # crash straight out of this loop with an unhandled
+                # exception, which Starlette then turns into an abrupt,
+                # unexplained connection close — exactly the "sometimes
+                # websockets disconnect unusually" symptom. Warn and keep
+                # the connection alive instead.
+                await manager.send_security_event(create_security_event(
+                    event_type="MALFORMED_WS_MESSAGE",
+                    status="WARNING",
+                    message=f"Received an unparseable WebSocket frame: {exc}",
+                    source=user_id,
+                ))
                 continue
 
-            recipient_id = int(data["recipient_id"])
-            text = data["text"]
-            client_msg_id = data.get("client_msg_id")
-
-            timestamp = datetime.now(timezone.utc).isoformat()
-
-            packet = {
-                "timestamp": timestamp,
-                "source": user_id,
-                "destination": recipient_id,
-                "message": text,
-                "size": len(text.encode("utf-8")),
-                "security_mode": "PLAINTEXT"
-            }
-
-            # ------------------------------------------------------------------
-            # REAL encryption of what the Hacker Viewer (the eavesdropper
-            # channel) sees. The two chat participants still get plaintext
-            # over their own authenticated /ws connection — this models
-            # an eavesdropper on the wire between server and monitoring
-            # tap, not a change to who's allowed to read their own chat.
-            # When encryption is ON, `packet["message"]` below is real
-            # AES-256-GCM ciphertext; the viewer genuinely cannot recover
-            # the text without the session key.
-            # ------------------------------------------------------------------
-            session = manager.session_crypto.get(user_id)
-
-            if SECURITY_CONFIG["encryption"] and session is not None:
-                seal = seal_message(
-                    text.encode("utf-8"),
-                    session.session_key,
-                    sign=SECURITY_CONFIG["message_integrity"],
-                    use_pqc_signature=SECURITY_CONFIG["ml_dsa"],
-                )
-                manager.last_message_seal[user_id] = seal
-                manager.seen_nonces.setdefault(user_id, set()).add(seal.nonce)
-
-                packet["message"] = base64.b64encode(seal.ciphertext).decode("ascii")
-                packet["nonce"] = base64.b64encode(seal.nonce).decode("ascii")
-                packet["security_mode"] = f"ENCRYPTED ({seal.algorithm})"
-                packet["size"] = len(seal.ciphertext)
-                if seal.signature:
-                    packet["signed"] = True
-                    packet["sig_algorithm"] = seal.sig_algorithm
-                    packet["signature_size"] = len(seal.signature)
-            elif SECURITY_CONFIG["encryption"] and session is None:
-                packet["security_mode"] = "ENCRYPTION ON — NO SESSION KEY (enable TLS or ML-KEM first)"
-
-            # The delivered message carries the REAL medium tag and the
-            # client's own message id back to it, so the browser can match
-            # its round trip to the exact medium the server actually used —
-            # not whatever the client assumed client-side.
-            message = {
-                "userId": user_id,
-                "recipient_id": recipient_id,
-                "text": text,
-                "time": timestamp,
-                "client_msg_id": client_msg_id,
-                "security_mode": packet["security_mode"],
-                "execution": "real" if not SECURITY_CONFIG["input_validation"] else "blocked",
-            }
-
-            db = SessionLocal()
             try:
-                db.add(Message(
-                    sender_id=user_id,
-                    recipient_id=recipient_id,
-                    text=text,
-                    created_at=datetime.fromisoformat(timestamp),
+                # ------------------------------------------------------------------
+                # REAL per-medium chat latency. The client measures its own
+                # full round trip (send -> server -> echoed back) on its own
+                # clock, so there's no cross-machine clock-skew problem, and
+                # reports it here tagged with which medium actually carried
+                # that message (PLAINTEXT vs ENCRYPTED, from the real packet
+                # this server built when it sent it — see below).
+                # ------------------------------------------------------------------
+                if data.get("type") == "latency_report":
+                    rtt_ms = data.get("rtt_ms")
+                    security_mode = data.get("security_mode", "UNKNOWN")
+
+                    if isinstance(rtt_ms, (int, float)) and rtt_ms >= 0:
+                        db = SessionLocal()
+                        try:
+                            db.add(ExperimentResult(
+                                experiment_type="MESSAGE_LATENCY",
+                                configuration=security_mode,
+                                result="MEASURED",
+                                latency_ms=float(rtt_ms),
+                                detail_json=json.dumps({
+                                    "client_msg_id": data.get("client_msg_id"),
+                                    "security_mode": security_mode,
+                                    "user_id": user_id,
+                                }),
+                                session_id=_current_benchmark_session_id(),
+                            ))
+                            db.commit()
+                        finally:
+                            db.close()
+
+                        await manager.send_to_dashboards({
+                            "type": "message_latency",
+                            "user_id": user_id,
+                            "security_mode": security_mode,
+                            "rtt_ms": rtt_ms,
+                        })
+
+                    continue
+
+                recipient_id = int(data["recipient_id"])
+                text = data["text"]
+                client_msg_id = data.get("client_msg_id")
+
+                # ------------------------------------------------------------------
+                # INTERCEPT (spec section 4). When armed from Hacker View, a
+                # message never reaches _deliver_chat_message directly — it
+                # sits in manager.pending_interceptions until the attacker
+                # RELEASEs, DROPs, or MODIFYs-then-RELEASEs it via
+                # /ws/dashboard. This is real message flow, not an
+                # animation: nothing is sent to the recipient or the viewer
+                # feed until a decision is made.
+                # ------------------------------------------------------------------
+                if SECURITY_CONFIG["interception_enabled"]:
+                    intercept_id = uuid.uuid4().hex[:12]
+                    entry = {
+                        "id": intercept_id,
+                        "sender_id": user_id,
+                        "recipient_id": recipient_id,
+                        "original_text": text,
+                        "current_text": text,
+                        "encrypted": SECURITY_CONFIG["encryption"],
+                        "client_msg_id": client_msg_id,
+                        "status": "PENDING",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if entry["encrypted"]:
+                        entry["encrypted_original_text"] = _encrypted_interception_text(user_id, text)
+                        entry["encrypted_current_text"] = entry["encrypted_original_text"]
+                    manager.pending_interceptions[intercept_id] = entry
+
+                    await manager.send_security_event(create_security_event(
+                        event_type="MESSAGE_INTERCEPTED",
+                        status="WARNING",
+                        message=(
+                            f"Message from user {user_id} to user {recipient_id} was "
+                            f"intercepted and is PAUSED — waiting for the attacker to "
+                            f"RELEASE, DROP, or MODIFY it from Hacker View."
+                        ),
+                        source=user_id,
+                    ))
+                    await manager.send_to_dashboards({
+                        "type": "message_intercepted",
+                        "intercept": _public_interception(entry),
+                    })
+                    continue
+
+                try:
+                    await _deliver_chat_message(user_id, recipient_id, text, client_msg_id)
+                except Exception:
+                    manager.session_crypto.pop(user_id, None)
+                    await websocket.send_json({
+                        "type": "session_key_corrupt",
+                        "message": "Your security session is no longer valid. Please log in again.",
+                        "login_url": "/login",
+                    })
+                    await websocket.close(code=4001)
+                    return
+
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                # A single malformed chat message (missing recipient_id/
+                # text, wrong types, etc.) used to raise straight out of
+                # this loop — an unhandled KeyError/ValueError/TypeError —
+                # which Starlette turns into an abrupt, unexplained
+                # connection close. Warn and keep the connection open
+                # instead; this is the other half of the "sometimes
+                # websockets disconnect unusually" fix (the other half is
+                # the malformed-JSON-frame guard above).
+                await manager.send_security_event(create_security_event(
+                    event_type="MALFORMED_WS_MESSAGE",
+                    status="WARNING",
+                    message=f"Chat message had missing or invalid fields: {exc}",
+                    source=user_id,
                 ))
-                db.commit()
-            finally:
-                db.close()
-
-            await manager.send_to_user(user_id, message)
-            await manager.send_to_user(recipient_id, message)
-
-            await manager.send_to_viewers(packet)
+                continue
 
     except WebSocketDisconnect:
         manager.disconnect(user_id)
@@ -637,6 +810,11 @@ async def viewer_websocket(websocket: WebSocket):
         return
 
     await manager.connect_viewer(websocket)
+
+    await websocket.send_json({
+        "type": "security_config",
+        "config": SECURITY_CONFIG,
+    })
 
     try:
         while True:
@@ -670,111 +848,269 @@ async def dashboard_websocket(websocket: WebSocket):
             "config": SECURITY_CONFIG
         })
 
+        # A freshly opened Hacker View tab should see messages that are
+        # already sitting in the interceptor queue, not just ones
+        # intercepted after it connected.
+        if manager.pending_interceptions:
+            await websocket.send_json({
+                "type": "pending_interceptions",
+                "intercepts": [
+                    _public_interception(entry)
+                    for entry in manager.pending_interceptions.values()
+                ],
+            })
+
         while True:
 
-            command = await websocket.receive_json()
+            try:
+                command = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                await manager.send_security_event(create_security_event(
+                    event_type="MALFORMED_WS_MESSAGE",
+                    status="WARNING",
+                    message=f"Dashboard socket received an unparseable frame: {exc}",
+                    source=user_id,
+                ))
+                continue
 
-            action = command.get("action")
+            try:
+                action = command.get("action")
 
-            if action == "GET_CONFIG":
-
-                await websocket.send_json({
-                    "type": "security_config",
-                    "config": SECURITY_CONFIG
-                })
-
-            elif action == "SET_SECURITY":
-
-                layer = command.get("layer")
-                enabled = command.get("enabled")
-
-                if layer in SECURITY_CONFIG:
-                    SECURITY_CONFIG[layer] = bool(enabled)
-
-                    event = create_security_event(
-                        event_type="SECURITY_CONFIGURATION",
-                        status="UPDATED",
-                        message=f"{layer} set to {enabled}",
-                        source=user_id
-                    )
-
-                    await manager.send_security_event(event)
+                if action == "GET_CONFIG":
 
                     await websocket.send_json({
                         "type": "security_config",
                         "config": SECURITY_CONFIG
                     })
 
-            elif action == "RUN_ATTACK":
+                elif action == "SET_SECURITY":
 
-                attack_type = command.get("attack")
+                    layer = command.get("layer")
+                    enabled = command.get("enabled")
 
-                event = security_engine.run_attack(
-                    attack_type,
-                    source=user_id
-                )
+                    if layer in SECURITY_CONFIG:
+                        SECURITY_CONFIG[layer] = bool(enabled)
+                        save_security_config(SECURITY_CONFIG)
+                        if layer in {"encryption", "tls", "ml_kem", "ml_dsa"}:
+                            _refresh_live_crypto_sessions()
 
-                await manager.send_security_event(event)
+                        event = create_security_event(
+                            event_type="SECURITY_CONFIGURATION",
+                            status="UPDATED",
+                            message=f"{layer} set to {enabled}",
+                            source=user_id
+                        )
 
-            elif action == "RUN_BENCHMARK":
+                        await manager.send_security_event(event)
 
-                if ACTIVE_BENCHMARK_SESSION["id"] is not None:
+                        await manager.send_security_config(SECURITY_CONFIG)
+
+                elif action == "RUN_ATTACK":
+
+                    attack_type = command.get("attack")
+
+                    event = security_engine.run_attack(
+                        attack_type,
+                        source=user_id
+                    )
+
+                    await manager.send_security_event(event)
+
+                elif action == "RUN_BENCHMARK":
+
+                    if ACTIVE_BENCHMARK_SESSION["id"] is not None:
+                        await websocket.send_json({
+                            "type": "benchmark_error",
+                            "message": "A benchmark is already running — wait for it to finish.",
+                        })
+                    else:
+                        duration_seconds = int(command.get("duration_seconds", 60))
+                        duration_seconds = max(10, min(duration_seconds, 300))
+
+                        session_id = uuid.uuid4().hex[:12]
+                        ACTIVE_BENCHMARK_SESSION["id"] = session_id
+                        ACTIVE_BENCHMARK_SESSION["ends_at"] = time.time() + duration_seconds
+
+                        await manager.send_security_event(create_security_event(
+                            event_type="BENCHMARK_STARTED",
+                            status="RUNNING",
+                            message=(
+                                f"Benchmark session {session_id} started — running for "
+                                f"{duration_seconds}s. Any real /ws handshake or chat "
+                                f"message sent during this window is captured into "
+                                f"this session's results, not just synthetic loop iterations."
+                            ),
+                            source=user_id,
+                        ))
+
+                        asyncio.create_task(run_benchmark_session(session_id, duration_seconds))
+
+                elif action == "RUN_RESUMPTION_BENCHMARK":
+                    # Real, synchronous measurement (fast — no time-windowed
+                    # session needed): full handshake vs cached-session
+                    # lookup, both timed with perf_counter() in
+                    # crypto_engine.run_resumption_benchmark(). Not a
+                    # simulated or assumed speedup — whatever percentage
+                    # comes back is what this run actually measured.
+                    iterations = int(command.get("iterations", 20))
+                    iterations = max(5, min(iterations, 100))
+
+                    result = run_resumption_benchmark(iterations=iterations)
+
+                    db = SessionLocal()
+                    try:
+                        db.add(ExperimentResult(
+                            experiment_type="RESUMPTION_BENCHMARK",
+                            configuration="session_caching_comparison",
+                            result="MEASURED",
+                            latency_ms=result["avg_resumed_lookup_ms"],
+                            detail_json=json.dumps(result),
+                            session_id=_current_benchmark_session_id(),
+                        ))
+                        db.commit()
+                    finally:
+                        db.close()
+
                     await websocket.send_json({
-                        "type": "benchmark_error",
-                        "message": "A benchmark is already running — wait for it to finish.",
+                        "type": "resumption_benchmark_result",
+                        "result": result,
                     })
-                else:
-                    duration_seconds = int(command.get("duration_seconds", 60))
-                    duration_seconds = max(10, min(duration_seconds, 300))
 
-                    session_id = uuid.uuid4().hex[:12]
-                    ACTIVE_BENCHMARK_SESSION["id"] = session_id
-                    ACTIVE_BENCHMARK_SESSION["ends_at"] = time.time() + duration_seconds
+                elif action == "RELEASE_MESSAGE":
+                    # Attacker chose RELEASE (with or without a prior
+                    # MODIFY_MESSAGE having changed current_text). Delivers
+                    # through the exact same _deliver_chat_message() path
+                    # as an ordinary, non-intercepted message.
+                    intercept_id = command.get("intercept_id")
+                    entry = manager.pending_interceptions.pop(intercept_id, None)
 
-                    await manager.send_security_event(create_security_event(
-                        event_type="BENCHMARK_STARTED",
-                        status="RUNNING",
-                        message=(
-                            f"Benchmark session {session_id} started — running for "
-                            f"{duration_seconds}s. Any real /ws handshake or chat "
-                            f"message sent during this window is captured into "
-                            f"this session's results, not just synthetic loop iterations."
-                        ),
-                        source=user_id,
-                    ))
+                    if entry is None:
+                        await websocket.send_json({
+                            "type": "intercept_error",
+                            "message": f"No pending intercepted message with id {intercept_id!r} (already released/dropped?).",
+                        })
+                    else:
+                        was_modified = entry["current_text"] != entry["original_text"]
+                        try:
+                            await _deliver_chat_message(
+                                entry["sender_id"],
+                                entry["recipient_id"],
+                                entry["current_text"],
+                                entry["client_msg_id"],
+                            )
+                            if was_modified:
+                                release_message = (
+                                    f"Message {intercept_id} released to user {entry['recipient_id']} — "
+                                    f"payload was MODIFIED before release. Original: "
+                                    f"{entry['original_text']!r} -> Delivered: {entry['current_text']!r}."
+                                )
+                            else:
+                                release_message = (
+                                    f"Message {intercept_id} released unmodified from user "
+                                    f"{entry['sender_id']} to user {entry['recipient_id']}."
+                                )
+                            await manager.send_security_event(create_security_event(
+                                event_type="MESSAGE_MODIFIED_RELEASED" if was_modified else "MESSAGE_RELEASED",
+                                status="WARNING" if was_modified else "MEASURED",
+                                message=release_message,
+                                source=entry["sender_id"],
+                            ))
+                        except Exception as exc:
+                            await manager.send_security_event(create_security_event(
+                                event_type="MESSAGE_RELEASE_FAILED",
+                                status="WARNING",
+                                message=f"Could not deliver released message {intercept_id}: {exc}",
+                                source=entry["sender_id"],
+                            ))
 
-                    asyncio.create_task(run_benchmark_session(session_id, duration_seconds))
+                        await manager.send_to_dashboards({
+                            "type": "message_intercept_resolved",
+                            "intercept_id": intercept_id,
+                            "resolution": "RELEASED",
+                        })
 
-            elif action == "RUN_RESUMPTION_BENCHMARK":
-                # Real, synchronous measurement (fast — no time-windowed
-                # session needed): full handshake vs cached-session
-                # lookup, both timed with perf_counter() in
-                # crypto_engine.run_resumption_benchmark(). Not a
-                # simulated or assumed speedup — whatever percentage
-                # comes back is what this run actually measured.
-                iterations = int(command.get("iterations", 20))
-                iterations = max(5, min(iterations, 100))
+                elif action == "DROP_MESSAGE":
+                    # Attacker chose DROP — the message is discarded for
+                    # real; the recipient never receives it and it never
+                    # reaches the viewer feed. No delivery call happens.
+                    intercept_id = command.get("intercept_id")
+                    entry = manager.pending_interceptions.pop(intercept_id, None)
 
-                result = run_resumption_benchmark(iterations=iterations)
+                    if entry is None:
+                        await websocket.send_json({
+                            "type": "intercept_error",
+                            "message": f"No pending intercepted message with id {intercept_id!r} (already released/dropped?).",
+                        })
+                    else:
+                        await manager.send_security_event(create_security_event(
+                            event_type="MESSAGE_DROPPED",
+                            status="BLOCKED",
+                            message=(
+                                f"Message {intercept_id} from user {entry['sender_id']} to "
+                                f"user {entry['recipient_id']} was DROPPED by the attacker — "
+                                f"it was never delivered."
+                            ),
+                            source=entry["sender_id"],
+                        ))
+                        await manager.send_to_dashboards({
+                            "type": "message_intercept_resolved",
+                            "intercept_id": intercept_id,
+                            "resolution": "DROPPED",
+                        })
 
-                db = SessionLocal()
-                try:
-                    db.add(ExperimentResult(
-                        experiment_type="RESUMPTION_BENCHMARK",
-                        configuration="session_caching_comparison",
-                        result="MEASURED",
-                        latency_ms=result["avg_resumed_lookup_ms"],
-                        detail_json=json.dumps(result),
-                        session_id=_current_benchmark_session_id(),
-                    ))
-                    db.commit()
-                finally:
-                    db.close()
+                elif action == "MODIFY_MESSAGE":
+                    # Attacker edits the payload while it's still PAUSED —
+                    # this only updates current_text in the real pending
+                    # queue entry; the message still needs a follow-up
+                    # RELEASE_MESSAGE to actually go out. Shows original
+                    # vs modified explicitly, per spec section 4.
+                    intercept_id = command.get("intercept_id")
+                    new_text = command.get("new_text", "")
+                    entry = manager.pending_interceptions.get(intercept_id)
 
-                await websocket.send_json({
-                    "type": "resumption_benchmark_result",
-                    "result": result,
-                })
+                    if entry is None:
+                        await websocket.send_json({
+                            "type": "intercept_error",
+                            "message": f"No pending intercepted message with id {intercept_id!r}.",
+                        })
+                    else:
+                        if entry.get("encrypted"):
+                            await websocket.send_json({
+                                "type": "intercept_error",
+                                "message": "Encrypted messages cannot be edited in Hacker View.",
+                            })
+                            continue
+                        entry["current_text"] = new_text
+                        entry["status"] = "MODIFIED" if new_text != entry["original_text"] else "PENDING"
+
+                        await manager.send_security_event(create_security_event(
+                            event_type="MESSAGE_MODIFIED",
+                            status="WARNING",
+                            message=(
+                                f"Message {intercept_id} payload changed by attacker while "
+                                f"paused. Original: {entry['original_text']!r} -> "
+                                f"Current: {entry['current_text']!r}. Still pending — "
+                                f"needs RELEASE to actually send."
+                            ),
+                            source=entry["sender_id"],
+                        ))
+                        await manager.send_to_dashboards({
+                            "type": "message_intercept_updated",
+                            "intercept": _public_interception(entry),
+                        })
+
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                await manager.send_security_event(create_security_event(
+                    event_type="DASHBOARD_COMMAND_FAILED",
+                    status="WARNING",
+                    message=f"Dashboard command failed: {exc}",
+                    source=user_id,
+                ))
+                continue
 
     except WebSocketDisconnect:
         manager.disconnect_dashboard(websocket)
@@ -818,6 +1154,11 @@ def chat_users(
 ):
     users = db.scalars(select(User).where(User.id != user_id).order_by(User.name)).all()
     return [{"id": user.id, "name": user.name} for user in users]
+
+
+@app.get("/api/session-status")
+def session_status(user_id: int = Depends(get_current_user)):
+    return {"user_id": user_id, "authenticated": True}
 
 
 @app.get("/api/messages/{other_user_id}")
@@ -981,7 +1322,9 @@ def login_post(
         response.set_cookie(
             key="access_token",
             value=f"Bearer {token}",
-            httponly=True
+            httponly=True,
+            path="/",
+            samesite="lax",
         )
 
         return response

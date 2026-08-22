@@ -13,3 +13,4 @@ instagram_reports.jsonl
 
 # Virtual environments
 .venv
+.security_config.json

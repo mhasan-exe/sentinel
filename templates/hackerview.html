@@ -133,6 +133,58 @@
             </div>
 
 
+            <div class="card shadow-sm border-0 mb-4">
+
+                <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-bug-fill me-2"></i>Attack Lab</span>
+                    <span id="attackSocketStatus" class="badge bg-warning text-dark">Connecting...</span>
+                </div>
+
+                <div class="card-body">
+
+                    <p class="text-muted small">
+                        Controlled security demonstrations — same real
+                        attacks as the Dashboard, runnable directly from
+                        the attacker's own view.
+                    </p>
+
+                    <button class="btn btn-outline-danger w-100 mb-2" onclick="runAttack('UNAUTHORIZED_WEBSOCKET')">Unauthorized WebSocket</button>
+                    <button class="btn btn-outline-danger w-100 mb-2" onclick="runAttack('INVALID_JWT')">Invalid JWT</button>
+                    <button class="btn btn-outline-danger w-100 mb-2" onclick="runAttack('JWT_TAMPERING')">JWT Tampering</button>
+                    <button class="btn btn-outline-danger w-100 mb-2" onclick="runAttack('XSS_TEST')">XSS Test</button>
+                    <button class="btn btn-outline-danger w-100 mb-2" onclick="runAttack('REPLAY_TEST')">Replay Test</button>
+                    <button class="btn btn-outline-danger w-100 mb-2" onclick="runAttack('MESSAGE_TAMPERING')">Message Tampering</button>
+                    <button class="btn btn-outline-danger w-100" onclick="runAttack('DATABASE_LEAK_SIMULATION')">Database Leak Simulation</button>
+
+                </div>
+
+            </div>
+
+
+            <div class="card shadow-sm border-0 mb-4">
+
+                <div class="card-header bg-dark text-white">
+                    <i class="bi bi-pause-circle me-2"></i>
+                    Interception Control
+                </div>
+
+                <div class="card-body">
+
+                    <p class="text-muted small mb-3">
+                        When armed, every chat message is held in a real
+                        queue before delivery — nothing reaches the
+                        recipient until you RELEASE, DROP, or MODIFY it.
+                    </p>
+
+                    <button id="interceptArmButton" class="btn btn-warning w-100" onclick="toggleInterception()">
+                        Arm Interception
+                    </button>
+
+                </div>
+
+            </div>
+
+
             <div class="card shadow-sm border-0">
 
                 <div class="card-header bg-dark text-white">
@@ -200,6 +252,31 @@
 
     </div>
 
+
+    <div class="row g-4 mt-1">
+
+        <div class="col-12">
+
+            <div class="card shadow-sm border-0">
+
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-inboxes me-2"></i>Message Interceptor Queue</span>
+                    <span id="pendingCount" class="badge bg-secondary">0 pending</span>
+                </div>
+
+                <div class="card-body">
+                    <div id="interceptQueueEmpty" class="text-muted text-center py-3">
+                        No messages currently paused. Arm interception above, then send a chat message from another tab.
+                    </div>
+                    <div id="interceptQueue"></div>
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
 </div>
 
 
@@ -214,6 +291,16 @@ const viewerProtocol =
 const viewerSocket =
     new WebSocket(
         `${viewerProtocol}//${window.location.host}/ws/viewer`
+    );
+
+// Second connection, dedicated to attacker COMMANDS (attacks, arming
+// interception, and RELEASE/DROP/MODIFY on paused messages) — same
+// endpoint the Dashboard uses, so these are real actions against the
+// real SECURITY_CONFIG and the real interceptor queue, not a
+// Hacker-View-only simulation of them.
+const attackSocket =
+    new WebSocket(
+        `${viewerProtocol}//${window.location.host}/ws/dashboard`
     );
 
 
@@ -264,16 +351,206 @@ function statusBadgeClass(status) {
         case "WARNING":    return "badge bg-warning text-dark";
         case "MEASURED":   return "badge bg-info text-dark";
         case "RUNNING":    return "badge bg-primary";
+        case "UPDATED":    return "badge bg-secondary";
         default:           return "badge bg-secondary";
     }
 }
 
 function securityModeBadgeClass(mode) {
     if (!mode) return "badge bg-secondary";
-    if (mode.startsWith("ENCRYPTED"))   return "badge bg-success";
+    if (mode.startsWith("ENCRYPT"))    return "badge bg-success";
     if (mode === "PLAINTEXT")           return "badge bg-danger";
     return "badge bg-warning text-dark"; // e.g. "ENCRYPTION ON — NO SESSION KEY"
 }
+
+function renderSecurityConfig(config) {
+    const modes = [];
+    if (config.encryption) modes.push("ENCRYPTION");
+    if (config.tls) modes.push("TLS");
+    if (config.ml_kem) modes.push("ML-KEM");
+    if (config.ml_dsa) modes.push("ML-DSA");
+    const mode = modes.length ? modes.join(" + ") : "PLAINTEXT";
+    currentSecurity.textContent = mode;
+    currentSecurity.className = securityModeBadgeClass(mode);
+}
+
+
+// ---------------------------------------------------------------------
+// Attack Lab + Interception (attackSocket / /ws/dashboard)
+// ---------------------------------------------------------------------
+
+const attackSocketStatus = document.getElementById("attackSocketStatus");
+const interceptArmButton = document.getElementById("interceptArmButton");
+const interceptQueue = document.getElementById("interceptQueue");
+const interceptQueueEmpty = document.getElementById("interceptQueueEmpty");
+const pendingCount = document.getElementById("pendingCount");
+
+let interceptionArmed = false;
+let pendingIntercepts = {}; // id -> intercept object
+
+attackSocket.onopen = function () {
+    attackSocketStatus.textContent = "Ready";
+    attackSocketStatus.className = "badge bg-success";
+};
+
+attackSocket.onclose = function () {
+    attackSocketStatus.textContent = "Disconnected";
+    attackSocketStatus.className = "badge bg-danger";
+};
+
+attackSocket.onerror = function () {
+    attackSocketStatus.textContent = "Error";
+    attackSocketStatus.className = "badge bg-danger";
+};
+
+function runAttack(attackType) {
+    if (attackSocket.readyState !== WebSocket.OPEN) return;
+    attackSocket.send(JSON.stringify({ action: "RUN_ATTACK", attack: attackType }));
+}
+
+function toggleInterception() {
+    if (attackSocket.readyState !== WebSocket.OPEN) return;
+    interceptionArmed = !interceptionArmed;
+    attackSocket.send(JSON.stringify({
+        action: "SET_SECURITY",
+        layer: "interception_enabled",
+        enabled: interceptionArmed,
+    }));
+}
+
+function releaseMessage(id) {
+    if (attackSocket.readyState !== WebSocket.OPEN) return;
+    attackSocket.send(JSON.stringify({ action: "RELEASE_MESSAGE", intercept_id: id }));
+}
+
+function dropMessage(id) {
+    if (attackSocket.readyState !== WebSocket.OPEN) return;
+    attackSocket.send(JSON.stringify({ action: "DROP_MESSAGE", intercept_id: id }));
+}
+
+function saveModification(id) {
+    if (attackSocket.readyState !== WebSocket.OPEN) return;
+    const textarea = document.getElementById(`intercept-text-${id}`);
+    attackSocket.send(JSON.stringify({
+        action: "MODIFY_MESSAGE",
+        intercept_id: id,
+        new_text: textarea.value,
+    }));
+}
+
+function renderInterceptQueue() {
+    const ids = Object.keys(pendingIntercepts);
+    pendingCount.textContent = `${ids.length} pending`;
+    interceptQueueEmpty.style.display = ids.length === 0 ? "block" : "none";
+
+    interceptQueue.innerHTML = "";
+    ids.forEach((id) => {
+        const entry = pendingIntercepts[id];
+        const wasModified = entry.current_text !== entry.original_text;
+
+        const card = document.createElement("div");
+        card.className = "card border-warning mb-3";
+
+        const body = document.createElement("div");
+        body.className = "card-body";
+
+        const header = document.createElement("div");
+        header.className = "d-flex justify-content-between align-items-center mb-2";
+        header.innerHTML = `
+            <span><span class="badge bg-primary">USER ${entry.sender_id}</span>
+            <i class="bi bi-arrow-right mx-1"></i>
+            <span class="badge bg-dark">USER ${entry.recipient_id}</span></span>
+            <span class="badge ${wasModified ? "bg-warning text-dark" : "bg-secondary"}">${wasModified ? "MODIFIED" : "PENDING"}</span>
+        `;
+
+        const originalLabel = document.createElement("small");
+        originalLabel.className = "text-muted d-block mt-2";
+        originalLabel.textContent = "Original message";
+        const originalText = document.createElement("div");
+        originalText.className = "bg-light border rounded p-2 mb-2";
+        originalText.textContent = entry.original_text;
+
+        const editLabel = document.createElement("small");
+        editLabel.className = "text-muted d-block";
+        editLabel.textContent = entry.editable
+            ? "Payload to release (edit to modify)"
+            : "Encrypted payload (editing disabled)";
+        const editArea = document.createElement("textarea");
+        editArea.className = "form-control mb-2";
+        editArea.id = `intercept-text-${entry.id}`;
+        editArea.rows = 2;
+        editArea.value = entry.current_text;
+        editArea.readOnly = !entry.editable;
+
+        const buttonRow = document.createElement("div");
+        buttonRow.className = "d-flex gap-2";
+        buttonRow.innerHTML = `
+            ${entry.editable ? `<button class="btn btn-sm btn-outline-secondary" onclick="saveModification('${entry.id}')">Save Edit</button>` : ""}
+            <button class="btn btn-sm btn-success" onclick="releaseMessage('${entry.id}')">Release</button>
+            <button class="btn btn-sm btn-outline-dark" onclick="dropMessage('${entry.id}')">Drop</button>
+        `;
+
+        body.appendChild(header);
+        body.appendChild(originalLabel);
+        body.appendChild(originalText);
+        body.appendChild(editLabel);
+        body.appendChild(editArea);
+        body.appendChild(buttonRow);
+        card.appendChild(body);
+        interceptQueue.appendChild(card);
+    });
+}
+
+attackSocket.onmessage = function (event) {
+    const data = JSON.parse(event.data);
+
+    if (data.type === "security_config") {
+        renderSecurityConfig(data.config);
+        interceptionArmed = !!data.config.interception_enabled;
+        interceptArmButton.textContent = interceptionArmed ? "Disarm Interception" : "Arm Interception";
+        interceptArmButton.className = interceptionArmed ? "btn btn-danger w-100" : "btn btn-warning w-100";
+        return;
+    }
+
+    if (data.type === "pending_interceptions") {
+        pendingIntercepts = {};
+        (data.intercepts || []).forEach((entry) => { pendingIntercepts[entry.id] = entry; });
+        renderInterceptQueue();
+        return;
+    }
+
+    if (data.type === "message_intercepted") {
+        pendingIntercepts[data.intercept.id] = data.intercept;
+        renderInterceptQueue();
+        return;
+    }
+
+    if (data.type === "message_intercept_updated") {
+        pendingIntercepts[data.intercept.id] = data.intercept;
+        renderInterceptQueue();
+        return;
+    }
+
+    if (data.type === "message_intercept_resolved") {
+        delete pendingIntercepts[data.intercept_id];
+        renderInterceptQueue();
+        return;
+    }
+
+    if (data.type === "security_event") {
+        createSecurityEvent(data);
+        return;
+    }
+
+    if (data.type === "intercept_error" || data.type === "benchmark_error") {
+        createSecurityEvent({
+            event: data.type.toUpperCase(),
+            status: "WARNING",
+            message: data.message,
+            timestamp: new Date().toISOString(),
+        });
+    }
+};
 
 
 viewerSocket.onopen = function () {

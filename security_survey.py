@@ -10,12 +10,16 @@ by hand from the raw responses stored in SurveyResponse.
 Question types:
   - "knowledge"  : one correct option, full credit or none
   - "scenario"   : same scoring as knowledge, phrased as a situation
-  - "confidence" : self-rated 1-5, credit is proportional (no "correct"
-                   answer — this measures self-assessment, not accuracy)
 
 Categories match spec section 5's example list:
   security_awareness, authentication, web_security, cryptography,
   post_quantum_awareness, network_security
+
+Exactly 10 questions total (spec section 2), weighted slightly toward
+the categories with the most Sentinel-specific follow-up demos
+(authentication, web_security, cryptography, post_quantum_awareness
+get 2 each; security_awareness and network_security get 1 each) —
+every category still has real, scored coverage.
 """
 
 CATEGORY_LABELS = {
@@ -32,19 +36,6 @@ QUESTIONS = [
     {
         "id": "q1",
         "category": "security_awareness",
-        "type": "scenario",
-        "text": "You get an email claiming to be your bank, asking you to click a link and log in immediately or your account will be suspended. What's the safest first move?",
-        "options": [
-            "Click the link and log in right away, just in case it's real",
-            "Ignore the email entirely and never check",
-            "Go to the bank's site directly (not via the email link) or call them to verify",
-            "Reply to the email asking if it's legitimate",
-        ],
-        "correct_index": 2,
-    },
-    {
-        "id": "q2",
-        "category": "security_awareness",
         "type": "knowledge",
         "text": "Reusing the same password across multiple unrelated accounts is risky mainly because:",
         "options": [
@@ -55,15 +46,9 @@ QUESTIONS = [
         ],
         "correct_index": 1,
     },
-    {
-        "id": "q3",
-        "category": "security_awareness",
-        "type": "confidence",
-        "text": "Overall, how would you rate your general cybersecurity awareness?",
-    },
     # ---- authentication ----
     {
-        "id": "q4",
+        "id": "q2",
         "category": "authentication",
         "type": "knowledge",
         "text": "A JWT (JSON Web Token) is made of three parts. Which of these is NOT one of them?",
@@ -71,7 +56,7 @@ QUESTIONS = [
         "correct_index": 3,
     },
     {
-        "id": "q5",
+        "id": "q3",
         "category": "authentication",
         "type": "scenario",
         "text": "A server checks a JWT's payload (who the user claims to be) but never verifies the signature. What's the practical risk?",
@@ -83,15 +68,9 @@ QUESTIONS = [
         ],
         "correct_index": 1,
     },
-    {
-        "id": "q6",
-        "category": "authentication",
-        "type": "confidence",
-        "text": "How confident are you explaining the difference between authentication and authorization?",
-    },
     # ---- web_security ----
     {
-        "id": "q7",
+        "id": "q4",
         "category": "web_security",
         "type": "knowledge",
         "text": "XSS (Cross-Site Scripting) attacks typically work by:",
@@ -104,7 +83,7 @@ QUESTIONS = [
         "correct_index": 2,
     },
     {
-        "id": "q8",
+        "id": "q5",
         "category": "web_security",
         "type": "scenario",
         "text": "A chat app inserts every message directly into the page with element.innerHTML = message instead of element.textContent = message. What does this open the door to?",
@@ -116,15 +95,9 @@ QUESTIONS = [
         ],
         "correct_index": 2,
     },
-    {
-        "id": "q9",
-        "category": "web_security",
-        "type": "confidence",
-        "text": "How confident are you in your ability to spot an XSS vulnerability by reading code?",
-    },
     # ---- cryptography ----
     {
-        "id": "q10",
+        "id": "q6",
         "category": "cryptography",
         "type": "knowledge",
         "text": "Why hash a password before storing it in a database, instead of storing it as plaintext?",
@@ -137,22 +110,16 @@ QUESTIONS = [
         "correct_index": 1,
     },
     {
-        "id": "q11",
+        "id": "q7",
         "category": "cryptography",
         "type": "knowledge",
         "text": "Which of these is a symmetric-key encryption algorithm (same key used to encrypt and decrypt)?",
         "options": ["RSA", "AES", "ECDSA", "ML-DSA"],
         "correct_index": 1,
     },
-    {
-        "id": "q12",
-        "category": "cryptography",
-        "type": "confidence",
-        "text": "How confident are you explaining the difference between encryption and hashing?",
-    },
     # ---- post_quantum_awareness ----
     {
-        "id": "q13",
+        "id": "q8",
         "category": "post_quantum_awareness",
         "type": "knowledge",
         "text": "Which quantum algorithm poses the theoretical threat to RSA and elliptic-curve cryptography?",
@@ -160,9 +127,9 @@ QUESTIONS = [
         "correct_index": 1,
     },
     {
-        "id": "q14",
+        "id": "q9",
         "category": "post_quantum_awareness",
-        "type": "knowledge",
+        "type": "scenario",
         "text": "\"Harvest now, decrypt later\" describes an adversary that:",
         "options": [
             "Steals a database and immediately reads all the plaintext",
@@ -172,28 +139,9 @@ QUESTIONS = [
         ],
         "correct_index": 1,
     },
-    {
-        "id": "q15",
-        "category": "post_quantum_awareness",
-        "type": "confidence",
-        "text": "How confident are you in your understanding of post-quantum cryptography (e.g. ML-KEM, ML-DSA)?",
-    },
     # ---- network_security ----
     {
-        "id": "q16",
-        "category": "network_security",
-        "type": "knowledge",
-        "text": "What does TLS primarily provide for a connection between a browser and a server?",
-        "options": [
-            "Faster page load times",
-            "Encryption and integrity for data in transit, plus server identity verification",
-            "Automatic virus scanning",
-            "Password strength enforcement",
-        ],
-        "correct_index": 1,
-    },
-    {
-        "id": "q17",
+        "id": "q10",
         "category": "network_security",
         "type": "scenario",
         "text": "An attacker on the same public Wi-Fi captures traffic between a browser and a site that has no TLS (plain HTTP). What can they see?",
@@ -204,12 +152,6 @@ QUESTIONS = [
             "Only the browser's operating system",
         ],
         "correct_index": 2,
-    },
-    {
-        "id": "q18",
-        "category": "network_security",
-        "type": "confidence",
-        "text": "How confident are you in identifying whether a website connection is secure (HTTPS/TLS)?",
     },
 ]
 

@@ -32,20 +32,25 @@
 </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg">
+    <nav class="navbar navbar-dark navbar-expand-lg">
         <div class="container">
-            <a class="navbar-brand text-white" href="/"><div class="font-animation"><p>SENTINEL</p></div></a>
-            <div class="navbar-nav">
-                <a class="nav-link text-light" href="/chat">Chat</a>
-                {% if user_id %}
-                    <a class="nav-link text-white" href="/dashboard">Dashboard</a>
-                    <a class="nav-link text-white" href="/users">Users</a>
-                    <a class="nav-link text-white" href="/logout">Logout</a>
-                {% else %}
-                    <a class="nav-link text-white" href="/login">Login</a>
-                    <a class="nav-link text-white" href="/register">Register</a>
-                {% endif %}
+            <a class="navbar-brand text-white" href="/"><span class="font-animation">SENTINEL</span></a>
+            <button class="navbar-toggler border-light" type="button" data-bs-toggle="collapse" data-bs-target="#siteNavigation" aria-controls="siteNavigation" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="siteNavigation">
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link text-light" href="/chat">Chat</a>
+                    {% if user_id %}
+                        <a class="nav-link text-white" href="/dashboard">Dashboard</a>
+                        <a class="nav-link text-white" href="/users">Users</a>
+                        <a class="nav-link text-white" href="/logout">Logout</a>
+                    {% else %}
+                        <a class="nav-link text-white" href="/login">Login</a>
+                        <a class="nav-link text-white" href="/register">Register</a>
+                    {% endif %}
                 </div>
+            </div>
         </div>
     </nav>
     <div class="container mt-4">

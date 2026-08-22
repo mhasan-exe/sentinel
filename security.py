@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta,timezone
 from fastapi import HTTPException, status, Depends,Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from security_config import SECURITY_CONFIG
 
 bearer_scheme = HTTPBearer()
 
@@ -18,7 +19,12 @@ def get_current_user(request: Request):
         
     try:
         token = token_cookie.replace("Bearer ", "")
-        payload = decode_access_token(token)
+        if SECURITY_CONFIG["jwt_authentication"]:
+            payload = decode_access_token(token)
+        else:
+            # The dashboard toggle intentionally demonstrates the insecure
+            # mode: accept claims without checking signature or expiry.
+            payload = decode_access_token_unverified(token)
         user_id = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload data.")

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import time
 import os
+import importlib
 from dataclasses import dataclass, field
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -51,23 +52,34 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidSignature
 
 try:
-    from pqcrypto.kem.ml_kem_768 import (
-        keygen as mlkem_generate_keypair,
-        encaps as mlkem_encapsulate,
-        decaps as mlkem_decapsulate,
-    )
-    from pqcrypto.sign.ml_dsa_65 import (
-        keygen as mldsa_generate_keypair,
-        sign as mldsa_sign,
-        verify as mldsa_verify,
-    )
+    _mlkem = importlib.import_module("pqcrypto.kem.ml_kem_768")
+    _mldsa = importlib.import_module("pqcrypto.sign.ml_dsa_65")
+
+    # pqcrypto 1.x uses the FIPS operation names; older releases used the
+    # equivalent generate_keypair/encrypt/decrypt names.
+    if hasattr(_mlkem, "keygen"):
+        mlkem_generate_keypair = _mlkem.keygen
+        mlkem_encapsulate = _mlkem.encaps
+        mlkem_decapsulate = _mlkem.decaps
+    else:
+        mlkem_generate_keypair = _mlkem.generate_keypair
+        mlkem_encapsulate = _mlkem.encrypt
+        mlkem_decapsulate = _mlkem.decrypt
+
+    if hasattr(_mldsa, "keygen"):
+        mldsa_generate_keypair = _mldsa.keygen
+    else:
+        mldsa_generate_keypair = _mldsa.generate_keypair
+    mldsa_sign = _mldsa.sign
+    mldsa_verify = _mldsa.verify
     PQC_AVAILABLE = True
     PQC_IMPORT_ERROR = None
-except ImportError as exc:
-    # Keep the app running, but expose the actual import failure to status
-    # consumers so an API mismatch is not mistaken for a missing package.
+    PQC_MODULE_NAMES = "pqcrypto.kem.ml_kem_768 / pqcrypto.sign.ml_dsa_65"
+except Exception as exc:
     PQC_AVAILABLE = False
-    PQC_IMPORT_ERROR = str(exc)
+    PQC_MODULE_NAMES = None
+    PQC_IMPORT_ERROR = f"pqcrypto import failed: {exc}"
+    print(f"[crypto_engine.py] WARNING: PQC unavailable — {PQC_IMPORT_ERROR}")
 
 
 # ---------------------------------------------------------------------

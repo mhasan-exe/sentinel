@@ -2,17 +2,34 @@
 
 {% block content %}
 <style>
-    .chat-shell { height: calc(100vh - 150px); min-height: 520px; }
+    .chat-shell { height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 520px; }
+    .chat-shell > .row { height: 100%; min-height: 0; }
+    .chat-shell > .row > * { min-height: 0; }
     .chat-sidebar { border-right: 1px solid #dee2e6; overflow-y: auto; }
     .chat-user { cursor: pointer; }
     .chat-user.active { background: #e8f1ff; }
     .chat-avatar { width: 42px; height: 42px; }
-    .chat-window { background: #efeae2; }
-    .chat-messages { overflow-y: auto; }
+    .chat-window { position: relative; height: 100%; background: #efeae2; min-height: 0; }
+    .chat-messages { flex: 1 1 0; min-height: 0; overflow-y: scroll; overscroll-behavior: contain; }
     .message-bubble { max-width: 75%; white-space: pre-wrap; overflow-wrap: anywhere; }
     .message-in { background: #fff; }
     .message-out { background: #d9fdd3; margin-left: auto; }
     .chat-empty { color: #6c757d; }
+    #sessionRecovery[hidden] { display: none !important; }
+    #messageForm { z-index: 2; flex: 0 0 auto; }
+    #messageForm[hidden] { display: none !important; }
+    #messageInput { min-width: 0; }
+
+    @media (max-width: 767.98px) {
+        .chat-shell { height: calc(100vh - 112px); height: calc(100dvh - 112px); min-height: 0; }
+        .chat-shell > .row { height: 100% !important; flex-flow: column nowrap; }
+        .chat-sidebar { flex: 0 0 178px; width: 100%; max-height: 178px; border-right: 0; border-bottom: 1px solid #dee2e6; }
+        .chat-window { flex: 1 1 0; width: 100%; min-height: 0; }
+        .chat-window #chatHeader { flex: 0 0 auto; }
+        .chat-window #messageForm:not([hidden]) { display: flex; }
+        .chat-window #sessionRecovery { flex-shrink: 0; gap: .5rem; }
+        .chat-window #sessionRecovery .btn { white-space: nowrap; }
+    }
 </style>
 
 <div class="container-fluid px-0">
@@ -25,6 +42,7 @@
                         <span id="socketStatus" class="badge text-bg-secondary">Connecting</span>
                     </div>
                     <div class="small text-muted mt-1">Signed in as user {{ user_id }}</div>
+                    <div id="liveSecurityMode" class="small text-muted mt-1">Security: loading...</div>
                 </div>
                 <div id="userList" class="list-group list-group-flush">
                     <div class="p-3 text-muted">Loading users...</div>
@@ -32,6 +50,10 @@
             </aside>
 
             <section class="col-md-8 col-lg-9 d-flex flex-column chat-window">
+                <div id="sessionRecovery" hidden class="alert alert-warning rounded-0 mb-0 d-flex justify-content-between align-items-center" role="alert">
+                    <span id="sessionRecoveryMessage">Your login session is expired or corrupt.</span>
+                    <a class="btn btn-sm btn-warning" href="/login">Log in again</a>
+                </div>
                 <header id="chatHeader" class="bg-white border-bottom p-3">
                     <div class="chat-empty">Select a user to open a chat</div>
                 </header>
@@ -59,7 +81,48 @@ const chatHeader = document.getElementById("chatHeader");
 const messageForm = document.getElementById("messageForm");
 const messageInput = document.getElementById("messageInput");
 const socketStatus = document.getElementById("socketStatus");
+const sessionRecovery = document.getElementById("sessionRecovery");
+const sessionRecoveryMessage = document.getElementById("sessionRecoveryMessage");
+const liveSecurityMode = document.getElementById("liveSecurityMode");
 let selectedUser = null;
+let sessionValid = true;
+
+function showSessionRecovery(message) {
+    sessionValid = false;
+    sessionRecoveryMessage.textContent = message;
+    sessionRecovery.hidden = false;
+    messageForm.hidden = true;
+    messageInput.disabled = true;
+}
+
+async function checkSession() {
+    try {
+        const response = await fetch("/api/session-status", { credentials: "same-origin" });
+        if (!response.ok) {
+            showSessionRecovery("Your login session is expired or invalid. Please log in again.");
+            if (socket.readyState === WebSocket.OPEN) socket.close(4001, "session invalid");
+            return false;
+        }
+        const status = await response.json();
+        if (Number(status.user_id) !== currentUserId) {
+            showSessionRecovery("Your login session changed. Please log in again.");
+            if (socket.readyState === WebSocket.OPEN) socket.close(4001, "session changed");
+            return false;
+        }
+        return true;
+    } catch (error) {
+        return sessionValid;
+    }
+}
+
+function renderLiveSecurity(config) {
+    const modes = [];
+    if (config.encryption) modes.push("Encryption");
+    if (config.tls) modes.push("TLS");
+    if (config.ml_kem) modes.push("ML-KEM");
+    if (config.ml_dsa) modes.push("ML-DSA");
+    liveSecurityMode.textContent = `Security: ${modes.length ? modes.join(" + ") : "Plaintext"}`;
+}
 
 function formatTime(value) {
     const date = new Date(value);
@@ -80,7 +143,13 @@ function renderMessage(message) {
     meta.textContent = `${formatTime(message.time)}${message.security_mode ? ` · ${message.security_mode}` : ""}`;
     row.appendChild(meta);
     messages.appendChild(row);
-    messages.scrollTop = messages.scrollHeight;
+    scrollMessagesToBottom();
+}
+
+function scrollMessagesToBottom() {
+    requestAnimationFrame(() => {
+        messages.scrollTop = messages.scrollHeight;
+    });
 }
 
 function showMessages(history) {
@@ -93,9 +162,11 @@ function showMessages(history) {
         return;
     }
     history.forEach(renderMessage);
+    scrollMessagesToBottom();
 }
 
 async function openChat(user, element) {
+    if (!sessionValid || !(await checkSession())) return;
     selectedUser = user;
     document.querySelectorAll(".chat-user").forEach(item => item.classList.remove("active"));
     element.classList.add("active");
@@ -114,6 +185,7 @@ async function openChat(user, element) {
         return;
     }
     showMessages(await response.json());
+    scrollMessagesToBottom();
     messageInput.focus();
 }
 
@@ -145,13 +217,25 @@ socket.addEventListener("open", () => {
     socketStatus.className = "badge text-bg-success";
 });
 
-socket.addEventListener("close", () => {
+socket.addEventListener("close", event => {
     socketStatus.textContent = "Offline";
     socketStatus.className = "badge text-bg-danger";
+    if (event.code === 1008 || event.code === 4001) {
+        showSessionRecovery("Your login session is expired or unavailable. Please log in again.");
+    }
 });
 
 socket.addEventListener("message", event => {
     const message = JSON.parse(event.data);
+    if (message.type === "security_config") {
+        renderLiveSecurity(message.config);
+        return;
+    }
+    if (message.type === "session_key_corrupt") {
+        sessionRecovery.querySelector("a").href = message.login_url || "/login";
+        showSessionRecovery(message.message);
+        return;
+    }
     if (!message.userId || !message.recipient_id || !selectedUser) return;
     const belongsToChat = (Number(message.userId) === currentUserId && Number(message.recipient_id) === selectedUser.id)
         || (Number(message.userId) === selectedUser.id && Number(message.recipient_id) === currentUserId);
@@ -162,14 +246,16 @@ socket.addEventListener("message", event => {
     }
 });
 
-messageForm.addEventListener("submit", event => {
+messageForm.addEventListener("submit", async event => {
     event.preventDefault();
     const text = messageInput.value.trim();
-    if (!text || !selectedUser || socket.readyState !== WebSocket.OPEN) return;
+    if (!text || !selectedUser || !sessionValid || socket.readyState !== WebSocket.OPEN) return;
+    if (!(await checkSession())) return;
     socket.send(JSON.stringify({ recipient_id: selectedUser.id, text, client_msg_id: crypto.randomUUID() }));
     messageInput.value = "";
 });
 
 loadUsers();
+setInterval(checkSession, 2000);
 </script>
 {% endblock %}
