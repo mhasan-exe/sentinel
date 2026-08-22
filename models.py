@@ -78,3 +78,10 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+
+
+class SecuritySetting(Base):
+    __tablename__ = "security_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[bool] = mapped_column(nullable=False)

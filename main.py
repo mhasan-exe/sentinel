@@ -33,7 +33,12 @@ from security import (
 )
 from connection_manager import manager
 from security_events import create_security_event
-from security_config import SECURITY_CONFIG, save_security_config
+from security_config import (
+    SECURITY_CONFIG,
+    save_security_config,
+    reset_security_config,
+    reload_security_config,
+)
 from security_engine import security_engine
 from security_survey import (
     QUESTIONS,
@@ -71,6 +76,7 @@ async def handle_http_exception(request: Request, exc: HTTPException):
 # Create any tables added since the last deployment, including the chat table.
 # This is idempotent and works with the Neon DATABASE_URL on Vercel.
 Base.metadata.create_all(bind=engine)
+reload_security_config()
 
 # Negative ids so anonymous/unauthenticated demo connections can never
 # collide with a real user's positive database id.
@@ -926,6 +932,18 @@ async def dashboard_websocket(websocket: WebSocket):
                     )
 
                     await manager.send_security_event(event)
+
+                elif action == "RESET_LAB":
+                    reset_security_config()
+                    manager.pending_interceptions.clear()
+                    manager.session_crypto.clear()
+                    await manager.send_security_config(SECURITY_CONFIG)
+                    await manager.send_security_event(create_security_event(
+                        event_type="LAB_RESET",
+                        status="UPDATED",
+                        message="Lab defenses reset. Benchmark history and database records were preserved.",
+                        source=user_id,
+                    ))
 
                 elif action == "RUN_BENCHMARK":
 

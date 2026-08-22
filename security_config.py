@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+from database import SessionLocal
+from models import SecuritySetting
+
 
 _DEFAULT_SECURITY_CONFIG = {
     "password_hashing": True,
@@ -40,7 +43,51 @@ def _load_security_config():
 
 
 def save_security_config(config):
-    _CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    try:
+        db = SessionLocal()
+        try:
+            for key, value in config.items():
+                setting = db.get(SecuritySetting, key)
+                if setting is None:
+                    db.add(SecuritySetting(key=key, value=bool(value)))
+                else:
+                    setting.value = bool(value)
+            db.commit()
+        finally:
+            db.close()
+        return
+    except Exception:
+        # Local SQLite may be unavailable before metadata is created. The
+        # file fallback is never required for Vercel's database-backed path.
+        try:
+            _CONFIG_PATH.write_text(
+                json.dumps(config, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+
+def load_database_security_config():
+    try:
+        db = SessionLocal()
+        try:
+            settings = db.query(SecuritySetting).all()
+            return {setting.key: setting.value for setting in settings}
+        finally:
+            db.close()
+    except Exception:
+        return {}
+
+
+def reload_security_config():
+    SECURITY_CONFIG.update(load_database_security_config())
+
+
+def reset_security_config():
+    SECURITY_CONFIG.clear()
+    SECURITY_CONFIG.update(_DEFAULT_SECURITY_CONFIG)
+    save_security_config(SECURITY_CONFIG)
 
 
 SECURITY_CONFIG = _load_security_config()
+reload_security_config()

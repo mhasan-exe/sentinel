@@ -98,6 +98,28 @@ class ConnectionManager:
             self.dashboard_connections.remove(websocket)
 
     async def send_security_event(self, event: dict):
+        # Persist the same event that is broadcast so the dashboard history
+        # and live feed cannot disagree.
+        try:
+            from database import SessionLocal
+            from models import ExperimentResult
+            import json
+            db = SessionLocal()
+            try:
+                db.add(ExperimentResult(
+                    experiment_type=event.get("event", "SECURITY_EVENT"),
+                    configuration="live",
+                    attack_type=event.get("event"),
+                    result=event.get("status", "UNKNOWN"),
+                    latency_ms=None,
+                    detail_json=json.dumps(event),
+                ))
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            pass
+
         # Security events go to both the Hacker Viewer and the Dashboard.
         # Previously this only reached viewer_connections, so the
         # dashboard's own "Security Events" panel never lit up.
