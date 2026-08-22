@@ -201,6 +201,36 @@
     </div>
 
 
+    <div class="card shadow-sm border-0 mt-4">
+
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <div>
+                <i class="bi bi-arrow-repeat me-2"></i>
+                Session Resumption Benchmark
+            </div>
+            <button id="resumptionBenchmarkButton" class="btn btn-sm btn-outline-light" onclick="runResumptionBenchmark()">
+                <i class="bi bi-play-fill me-1"></i> Run Comparison
+            </button>
+        </div>
+
+        <div class="card-body">
+
+            <p class="text-muted small mb-2">
+                Requires "Session Caching" ON to have any effect. Runs one real full
+                handshake, caches the session key, then times real cache-lookup
+                "reconnects" against fresh full handshakes on this machine — the
+                speedup shown is whatever this run actually measured, not a fixed number.
+            </p>
+
+            <div id="resumptionResults">
+                <div class="text-muted">No comparison run yet this session.</div>
+            </div>
+
+        </div>
+
+    </div>
+
+
     <!-- Experiment History Modal -->
     <div class="modal fade" id="historyModal" tabindex="-1">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -319,7 +349,10 @@ const layerNames = {
         "ML-KEM",
 
     ml_dsa:
-        "ML-DSA"
+        "ML-DSA",
+
+    session_caching:
+        "Session Caching (Resumption)"
 
 };
 
@@ -377,7 +410,60 @@ socket.onmessage = function(event) {
         recordDashboardLatency(data.security_mode, data.rtt_ms);
     }
 
+    if (data.type === "resumption_benchmark_result") {
+        renderResumptionBenchmark(data.result);
+    }
+
 };
+
+
+function runResumptionBenchmark() {
+
+    if (socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+
+    const button = document.getElementById("resumptionBenchmarkButton");
+    button.disabled = true;
+    button.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Running...`;
+
+    socket.send(JSON.stringify({
+        action: "RUN_RESUMPTION_BENCHMARK",
+        iterations: 20,
+    }));
+}
+
+
+function renderResumptionBenchmark(result) {
+
+    const button = document.getElementById("resumptionBenchmarkButton");
+    button.disabled = false;
+    button.innerHTML = `<i class="bi bi-play-fill me-1"></i> Run Comparison`;
+
+    const container = document.getElementById("resumptionResults");
+
+    const speedupLabel = (result.measured_speedup_pct === null || result.measured_speedup_pct === undefined)
+        ? "n/a (session_caching may be OFF)"
+        : `${result.measured_speedup_pct}% faster (measured)`;
+
+    container.innerHTML = `
+        <div class="row text-center">
+            <div class="col-4">
+                <div class="small text-muted">Full handshake (avg)</div>
+                <div class="fs-5">${result.avg_full_handshake_ms ?? "—"} ms</div>
+            </div>
+            <div class="col-4">
+                <div class="small text-muted">Resumed lookup (avg)</div>
+                <div class="fs-5">${result.avg_resumed_lookup_ms ?? "—"} ms</div>
+            </div>
+            <div class="col-4">
+                <div class="small text-muted">Measured speedup</div>
+                <div class="fs-5">${speedupLabel}</div>
+            </div>
+        </div>
+        <div class="small text-muted mt-2">${result.kem_algorithm} / ${result.sig_algorithm} — ${result.iterations} iterations. ${result.note}</div>
+    `;
+}
 
 
 function renderSecurityLayers(config) {
@@ -590,7 +676,7 @@ function renderBenchmarkFinal(session) {
 
     const pqcNote = session.pqc_available
         ? ""
-        : `<div class="alert alert-warning">ML-KEM/ML-DSA skipped — <code>pqcrypto</code> not installed on the server.</div>`;
+        : `<div class="alert alert-warning">ML-KEM/ML-DSA skipped — <code>pqcrypto</code> is unavailable to the server. Check the Python environment and import compatibility.</div>`;
 
     const realHandshakeNote = session.real_ws_handshakes_captured > 0
         ? `<div class="alert alert-success">Captured ${session.real_ws_handshakes_captured} real <code>/ws</code> connection handshake(s) during this window, averaging ${session.real_ws_handshake_avg_ms}ms.</div>`

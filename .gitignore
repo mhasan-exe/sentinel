@@ -1,3 +1,6 @@
+# Secrets — never commit real credentials
+.env
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -5,6 +8,8 @@ build/
 dist/
 wheels/
 *.egg-info
+instagram_reports.jsonl
+.instagram-browser/
 
 # Virtual environments
 .venv

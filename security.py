@@ -27,6 +27,21 @@ def get_current_user(request: Request):
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired or corrupt auth session key.")
 
+
+def get_current_user_optional(request: Request):
+    """
+    Same decode logic as get_current_user, but returns None instead of
+    raising when there's no session — for pages any visitor can see
+    (home, assessment, login, register) that still want to know whether
+    to show "Login" or "Logout" in the nav. Never use this to gate
+    anything that actually needs to be protected; use get_current_user
+    for that.
+    """
+    try:
+        return get_current_user(request)
+    except HTTPException:
+        return None
+
 SECRET_KEY = os.environ.get("SENTINEL_SECRET_KEY")
 if not SECRET_KEY:
     # Dev-only fallback so the app still runs without setup. This key is

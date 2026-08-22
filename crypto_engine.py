@@ -52,21 +52,20 @@ from cryptography.exceptions import InvalidSignature
 
 try:
     from pqcrypto.kem.ml_kem_768 import (
-        generate_keypair as mlkem_generate_keypair,
-        encrypt as mlkem_encapsulate,
-        decrypt as mlkem_decapsulate,
+        keygen as mlkem_generate_keypair,
+        encaps as mlkem_encapsulate,
+        decaps as mlkem_decapsulate,
     )
     from pqcrypto.sign.ml_dsa_65 import (
-        generate_keypair as mldsa_generate_keypair,
+        keygen as mldsa_generate_keypair,
         sign as mldsa_sign,
         verify as mldsa_verify,
     )
     PQC_AVAILABLE = True
     PQC_IMPORT_ERROR = None
 except ImportError as exc:
-    # If pqcrypto isn't installed on this machine, Sentinel should
-    # degrade honestly (dashboard shows "PQC unavailable") instead of
-    # crashing the whole app or silently pretending ML-KEM/ML-DSA ran.
+    # Keep the app running, but expose the actual import failure to status
+    # consumers so an API mismatch is not mistaken for a missing package.
     PQC_AVAILABLE = False
     PQC_IMPORT_ERROR = str(exc)
 
@@ -400,6 +399,134 @@ def benchmark_single_iteration(use_pqc: bool, message_bytes: bytes = b"Sentinel 
         "public_key_size": hs.public_key_size,
         "ciphertext_or_ephemeral_size": hs.ciphertext_or_ephemeral_size,
         "signature_size": hs.signature_size,
+    }
+
+
+# ---------------------------------------------------------------------
+# Session resumption cache — real feature, not a narrated speedup.
+#
+# A fresh ML-KEM-768 + ML-DSA-65 handshake is the expensive part of
+# connecting (keygen + encapsulate/decapsulate + a ~3.3KB ML-DSA
+# signature to generate and verify). If the same user reconnects
+# shortly after, there's no cryptographic need to redo all of that: we
+# cache the derived session key for a short TTL and let a reconnecting
+# user resume it directly, the same way TLS 1.3 session resumption
+# skips a full handshake on a returning connection.
+#
+# What's real here: the cache lookup, the TTL expiry check, and the
+# timing of both paths (perf_counter() on each). What's NOT claimed:
+# this is not a new cryptographic algorithm, and it does not run
+# instead of ML-KEM/ML-DSA — it runs after them, on top of a handshake
+# that already happened for real at least once.
+# ---------------------------------------------------------------------
+
+_SESSION_CACHE_TTL_SECONDS = 300  # 5 minutes
+
+
+class SessionCache:
+    def __init__(self, ttl_seconds: float = _SESSION_CACHE_TTL_SECONDS):
+        self.ttl_seconds = ttl_seconds
+        self._store: dict[int, tuple[float, HandshakeResult]] = {}
+
+    def get(self, user_id: int) -> HandshakeResult | None:
+        entry = self._store.get(user_id)
+        if entry is None:
+            return None
+        cached_at, handshake = entry
+        if (time.time() - cached_at) > self.ttl_seconds:
+            self._store.pop(user_id, None)
+            return None
+        return handshake
+
+    def put(self, user_id: int, handshake: HandshakeResult) -> None:
+        self._store[user_id] = (time.time(), handshake)
+
+    def invalidate(self, user_id: int) -> None:
+        self._store.pop(user_id, None)
+
+    def clear(self) -> None:
+        self._store.clear()
+
+
+SESSION_CACHE = SessionCache()
+
+
+def resume_or_handshake(user_id: int, use_pqc: bool, allow_resume: bool) -> tuple[HandshakeResult, bool, float]:
+    """
+    Real entry point for main.py's /ws handler when session_caching is
+    considered. Returns (handshake, was_resumed, lookup_or_handshake_ms).
+
+    - allow_resume False (session_caching toggle OFF): always runs a
+      full handshake, exactly like before this feature existed.
+    - allow_resume True: checks the real cache first. A hit returns the
+      SAME session key object with a real (near-zero) cache-lookup
+      timing. A miss runs the full handshake and caches the result for
+      next time.
+    """
+    if allow_resume:
+        start = time.perf_counter()
+        cached = SESSION_CACHE.get(user_id)
+        lookup_ms = (time.perf_counter() - start) * 1000
+        if cached is not None:
+            return cached, True, lookup_ms
+
+    handshake = perform_handshake(use_pqc=use_pqc)
+    if allow_resume:
+        SESSION_CACHE.put(user_id, handshake)
+    return handshake, False, handshake.timings_ms["total_ms"]
+
+
+def run_resumption_benchmark(iterations: int = 20) -> dict:
+    """
+    Measures the real cost difference between "full handshake every
+    time" and "full handshake once, then resume from cache" — using
+    the SAME perform_handshake()/PQC path as everywhere else in this
+    file. No numbers here are assumed; every value is averaged from
+    actual timed calls in this process, on this machine, in this run.
+    """
+    sample_message = b"Sentinel benchmark message payload - fixed size for fair comparison."
+    demo_user_id = -999999  # scratch id, never collides with a real user
+
+    # Baseline: full handshake, every single time (current default).
+    full_totals = []
+    for _ in range(iterations):
+        hs = perform_handshake(use_pqc=PQC_AVAILABLE)
+        full_totals.append(hs.timings_ms["total_ms"])
+
+    # With caching: one real full handshake seeds the cache, then every
+    # subsequent "reconnect" is a real cache lookup, timed the same way.
+    SESSION_CACHE.invalidate(demo_user_id)
+    seed_hs, _, seed_ms = resume_or_handshake(demo_user_id, use_pqc=PQC_AVAILABLE, allow_resume=True)
+    resumed_totals = []
+    for _ in range(iterations):
+        _, was_resumed, resumed_ms = resume_or_handshake(demo_user_id, use_pqc=PQC_AVAILABLE, allow_resume=True)
+        if was_resumed:
+            resumed_totals.append(resumed_ms)
+    SESSION_CACHE.invalidate(demo_user_id)
+
+    def avg(values):
+        return round(sum(values) / len(values), 4) if values else None
+
+    avg_full = avg(full_totals)
+    avg_resumed = avg(resumed_totals)
+    speedup_pct = (
+        round((1 - (avg_resumed / avg_full)) * 100, 1)
+        if avg_full and avg_resumed is not None and avg_full > 0
+        else None
+    )
+
+    return {
+        "iterations": iterations,
+        "kem_algorithm": "ML-KEM-768" if PQC_AVAILABLE else "X25519",
+        "sig_algorithm": "ML-DSA-65" if PQC_AVAILABLE else "Ed25519",
+        "avg_full_handshake_ms": avg_full,
+        "avg_resumed_lookup_ms": avg_resumed,
+        "measured_speedup_pct": speedup_pct,
+        "note": (
+            "Speedup is the real difference between a fresh handshake and a "
+            "cache lookup on this machine, this run — not a fixed or assumed "
+            "number. It will vary run to run."
+        ),
     }
 
 

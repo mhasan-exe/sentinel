@@ -26,6 +26,7 @@ from security import (
     hash_password,
     verify_password,
     get_current_user,
+    get_current_user_optional,
     create_access_token,
     decode_access_token,
     decode_access_token_unverified,
@@ -43,6 +44,9 @@ from crypto_engine import (
     perform_handshake,
     seal_message,
     benchmark_single_iteration,
+    resume_or_handshake,
+    run_resumption_benchmark,
+    SESSION_CACHE,
     PQC_AVAILABLE,
 )
 
@@ -218,15 +222,16 @@ def get_db():
 
 
 @app.get("/")
-def homepage(request: Request):
+def homepage(request: Request, user_id: int | None = Depends(get_current_user_optional)):
     return templates.TemplateResponse(
         request,
-        "home.html"
+        "home.html",
+        {"user_id": user_id}
     )
 
 
 @app.get("/presentation")
-def presentation_page(request: Request):
+def presentation_page(request: Request, user_id: int | None = Depends(get_current_user_optional)):
     import glob
     import os
 
@@ -238,16 +243,16 @@ def presentation_page(request: Request):
     return templates.TemplateResponse(
         request,
         "presentation.html",
-        {"slide_files": slide_files}
+        {"slide_files": slide_files, "user_id": user_id}
     )
 
 
 @app.get("/assessment")
-def assessment_page(request: Request):
+def assessment_page(request: Request, user_id: int | None = Depends(get_current_user_optional)):
     return templates.TemplateResponse(
         request,
         "assessment.html",
-        {"questions": QUESTIONS}
+        {"questions": QUESTIONS, "user_id": user_id}
     )
 
 
@@ -291,7 +296,7 @@ async def assessment_submit(
     return templates.TemplateResponse(
         request,
         "assessment_result.html",
-        {"profile": profile, "logged_in": user_id is not None}
+        {"profile": profile, "logged_in": user_id is not None, "user_id": user_id}
     )
 
 
@@ -342,7 +347,12 @@ def experiment_history(
 
 @app.get("/api/pqc-status")
 def pqc_status():
-    return {"pqc_available": PQC_AVAILABLE}
+    from crypto_engine import PQC_IMPORT_ERROR
+
+    return {
+        "pqc_available": PQC_AVAILABLE,
+        "error": PQC_IMPORT_ERROR,
+    }
 
 
 @app.websocket("/ws")
@@ -419,16 +429,22 @@ async def websocket_endpoint(websocket: WebSocket):
     # ------------------------------------------------------------------
     if SECURITY_CONFIG["tls"] or SECURITY_CONFIG["ml_kem"]:
         try:
-            handshake = perform_handshake(use_pqc=SECURITY_CONFIG["ml_kem"])
+            handshake, was_resumed, elapsed_ms = resume_or_handshake(
+                user_id,
+                use_pqc=SECURITY_CONFIG["ml_kem"],
+                allow_resume=SECURITY_CONFIG["session_caching"],
+            )
             manager.session_crypto[user_id] = handshake
+
+            base_config = "ml_kem" if SECURITY_CONFIG["ml_kem"] else "tls_classical"
 
             db = SessionLocal()
             try:
                 db.add(ExperimentResult(
-                    experiment_type="HANDSHAKE",
-                    configuration="ml_kem" if SECURITY_CONFIG["ml_kem"] else "tls_classical",
+                    experiment_type="HANDSHAKE_RESUMED" if was_resumed else "HANDSHAKE",
+                    configuration=f"{base_config}_resumed" if was_resumed else base_config,
                     result="MEASURED",
-                    latency_ms=handshake.timings_ms["total_ms"],
+                    latency_ms=elapsed_ms,
                     detail_json=json.dumps({
                         "kem_algorithm": handshake.kem_algorithm,
                         "sig_algorithm": handshake.sig_algorithm,
@@ -436,6 +452,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "ciphertext_or_ephemeral_size": handshake.ciphertext_or_ephemeral_size,
                         "signature_size": handshake.signature_size,
                         "timings_ms": handshake.timings_ms,
+                        "resumed_from_cache": was_resumed,
                     }),
                     session_id=_current_benchmark_session_id(),
                 ))
@@ -443,18 +460,30 @@ async def websocket_endpoint(websocket: WebSocket):
             finally:
                 db.close()
 
-            await manager.send_security_event(create_security_event(
-                event_type="HANDSHAKE_COMPLETE",
-                status="MEASURED",
-                message=(
-                    f"{handshake.kem_algorithm} key exchange + {handshake.sig_algorithm} "
-                    f"signature completed in {handshake.timings_ms['total_ms']:.2f}ms "
-                    f"(pubkey {handshake.public_key_size}B, "
-                    f"ciphertext/ephemeral {handshake.ciphertext_or_ephemeral_size}B, "
-                    f"signature {handshake.signature_size}B)."
-                ),
-                source=user_id,
-            ))
+            if was_resumed:
+                await manager.send_security_event(create_security_event(
+                    event_type="HANDSHAKE_RESUMED",
+                    status="MEASURED",
+                    message=(
+                        f"Resumed a cached {handshake.kem_algorithm}/{handshake.sig_algorithm} "
+                        f"session key in {elapsed_ms:.4f}ms — no new handshake was needed "
+                        f"(session_caching is ON, and a valid cache entry existed for this user)."
+                    ),
+                    source=user_id,
+                ))
+            else:
+                await manager.send_security_event(create_security_event(
+                    event_type="HANDSHAKE_COMPLETE",
+                    status="MEASURED",
+                    message=(
+                        f"{handshake.kem_algorithm} key exchange + {handshake.sig_algorithm} "
+                        f"signature completed in {handshake.timings_ms['total_ms']:.2f}ms "
+                        f"(pubkey {handshake.public_key_size}B, "
+                        f"ciphertext/ephemeral {handshake.ciphertext_or_ephemeral_size}B, "
+                        f"signature {handshake.signature_size}B)."
+                    ),
+                    source=user_id,
+                ))
         except Exception as exc:
             await manager.send_security_event(create_security_event(
                 event_type="HANDSHAKE_FAILED",
@@ -716,15 +745,47 @@ async def dashboard_websocket(websocket: WebSocket):
 
                     asyncio.create_task(run_benchmark_session(session_id, duration_seconds))
 
+            elif action == "RUN_RESUMPTION_BENCHMARK":
+                # Real, synchronous measurement (fast — no time-windowed
+                # session needed): full handshake vs cached-session
+                # lookup, both timed with perf_counter() in
+                # crypto_engine.run_resumption_benchmark(). Not a
+                # simulated or assumed speedup — whatever percentage
+                # comes back is what this run actually measured.
+                iterations = int(command.get("iterations", 20))
+                iterations = max(5, min(iterations, 100))
+
+                result = run_resumption_benchmark(iterations=iterations)
+
+                db = SessionLocal()
+                try:
+                    db.add(ExperimentResult(
+                        experiment_type="RESUMPTION_BENCHMARK",
+                        configuration="session_caching_comparison",
+                        result="MEASURED",
+                        latency_ms=result["avg_resumed_lookup_ms"],
+                        detail_json=json.dumps(result),
+                        session_id=_current_benchmark_session_id(),
+                    ))
+                    db.commit()
+                finally:
+                    db.close()
+
+                await websocket.send_json({
+                    "type": "resumption_benchmark_result",
+                    "result": result,
+                })
+
     except WebSocketDisconnect:
         manager.disconnect_dashboard(websocket)
 
 
 @app.get("/register")
-def register_page(request: Request):
+def register_page(request: Request, user_id: int | None = Depends(get_current_user_optional)):
     return templates.TemplateResponse(
         request,
-        "register.html"
+        "register.html",
+        {"user_id": user_id}
     )
 
 @app.get("/chat")
@@ -803,7 +864,7 @@ def profile_page(
     return templates.TemplateResponse(
         request,
         "profile.html",
-        {"user": user}
+        {"user": user, "user_id": user_id}
     )
 
 
@@ -842,8 +903,15 @@ def submit_post(
 @app.get("/users")
 def load_all_users(
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user),
 ):
+    # Was previously public and rendered every user's password_hash in
+    # plain HTML — a real credential leak, not a Hacker View simulation.
+    # Now requires login, and the template no longer shows hashes to
+    # anyone (see templates/users.html and the DATABASE_LEAK_SIMULATION
+    # attack in security_engine.py for the intentional, contained demo
+    # of what a real leak like this would expose).
     users = db.scalars(
         select(User)
     ).all()
@@ -851,16 +919,40 @@ def load_all_users(
     return templates.TemplateResponse(
         request,
         "users.html",
-        {"users": users}
+        {"users": users, "user_id": user_id}
     )
 
 
 @app.get("/login")
-def login_page(request: Request):
+def login_page(request: Request, user_id: int | None = Depends(get_current_user_optional)):
     return templates.TemplateResponse(
         request,
-        "login.html"
+        "login.html",
+        {"user_id": user_id}
     )
+
+
+@app.get("/logout")
+def logout(request: Request):
+    """
+    Clears the auth cookie and sends the visitor home. Uses delete_cookie
+    (not just an expired set_cookie) so the browser actually drops it,
+    and matches the exact key/path the login flow set it with. Also
+    invalidates any cached session-resumption key for this user — a
+    logged-out session shouldn't let a later reconnect skip the
+    handshake using a key derived while they were still logged in.
+    """
+    token = request.cookies.get("access_token")
+    if token:
+        try:
+            payload = decode_access_token(token.replace("Bearer ", ""))
+            SESSION_CACHE.invalidate(int(payload["sub"]))
+        except Exception:
+            pass
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie(key="access_token")
+    return response
 
 
 @app.post("/login")
@@ -922,7 +1014,8 @@ def protected(
         {
             "name": user.name,
             "email": user.email,
-            "Message": "Authenticated"
+            "Message": "Authenticated",
+            "user_id": user_id,
         }
     )
 
