@@ -421,20 +421,26 @@ function renderDefenseMatrix(config) {
 
 async function renderHandshakeChart() {
     const rows = await fetch("/api/experiments").then(response => response.json());
-    const measured = rows.filter(row => row.experiment_type === "HANDSHAKE" && row.latency_ms !== null);
-    const grouped = {};
-    measured.forEach(row => {
-        grouped[row.configuration] ??= [];
-        grouped[row.configuration].push(row.latency_ms);
-    });
-    const labels = Object.keys(grouped);
-    const values = labels.map(label => grouped[label].reduce((sum, value) => sum + value, 0) / grouped[label].length);
+    const average = values => values.length
+        ? values.reduce((sum, value) => sum + value, 0) / values.length
+        : null;
+    const classical = rows
+        .filter(row => row.experiment_type === "HANDSHAKE" && row.configuration === "tls_classical" && row.latency_ms !== null)
+        .map(row => row.latency_ms);
+    const pqc = rows
+        .filter(row => row.experiment_type === "HANDSHAKE" && row.configuration === "ml_kem" && row.latency_ms !== null)
+        .map(row => row.latency_ms);
+    const resumed = rows
+        .filter(row => row.experiment_type === "RESUMPTION_BENCHMARK" && row.detail?.avg_resumed_lookup_ms !== null)
+        .map(row => row.detail.avg_resumed_lookup_ms);
+    const labels = ["Classical handshake", "ML-KEM handshake", "Session resumption"];
+    const values = [average(classical), average(pqc), average(resumed)];
     if (!window.Chart) return;
     handshakeChart?.destroy();
     handshakeChart = new Chart(handshakeChartCanvas, {
         type: "bar",
-        data: { labels, datasets: [{ label: "Measured average (ms)", data: values, backgroundColor: ["#6c757d", "#198754"] }] },
-        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+        data: { labels, datasets: [{ label: "Measured average (ms)", data: values, backgroundColor: ["#6c757d", "#198754", "#0d6efd"] }] },
+        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: context => context.raw === null ? "No measured data yet" : `${context.raw.toFixed(3)} ms` } } }, scales: { y: { beginAtZero: true, title: { display: true, text: "Milliseconds" } } } },
     });
 }
 
@@ -523,6 +529,7 @@ socket.onmessage = function(event) {
 
     if (data.type === "benchmark_result") {
         renderBenchmarkFinal(data.session);
+        renderHandshakeChart();
     }
 
     if (data.type === "benchmark_error") {
@@ -536,6 +543,7 @@ socket.onmessage = function(event) {
 
     if (data.type === "resumption_benchmark_result") {
         renderResumptionBenchmark(data.result);
+        renderHandshakeChart();
     }
 
 };

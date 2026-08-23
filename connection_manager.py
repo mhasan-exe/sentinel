@@ -71,6 +71,10 @@ class ConnectionManager:
         for websocket in dead:
             self.disconnect(user_id, websocket)
 
+    async def send_to_all_users(self, message: dict):
+        for user_id in list(self.active_connections):
+            await self.send_to_user(user_id, message)
+
     async def connect_viewer(self, websocket: WebSocket):
         await websocket.accept()
         self.viewer_connections.append(websocket)

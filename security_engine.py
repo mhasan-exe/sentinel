@@ -109,7 +109,13 @@ class SecurityEngine:
         )
 
     def xss_test(self, source=None):
-        payload = "<script>alert('sentinel-xss-test')</script>"
+        payload = (
+            "<img src=x onerror=\"fetch('/api/database-leak', "
+            "{credentials:'same-origin'}).then(r=>r.json()).then(d=>{"
+            "document.body.dataset.xssCookie=document.cookie||'[HttpOnly cookies hidden]';"
+            "document.body.dataset.xssDatabase=JSON.stringify(d.rows);"
+            "alert('XSS accessed same-origin database data');})\">"
+        )
 
         if SECURITY_CONFIG["input_validation"]:
             status = "BLOCKED"
@@ -121,15 +127,19 @@ class SecurityEngine:
             status = "VULNERABLE"
             message = (
                 f"Input validation is OFF — payload {payload!r} could be "
-                "reflected without sanitization."
+                "reflected without sanitization. It performs an authenticated "
+                "same-origin database read; HttpOnly auth cookies remain hidden "
+                "from document.cookie, but XSS can still act as the user."
             )
 
-        return create_security_event(
+        event = create_security_event(
             event_type="XSS_TEST",
             status=status,
             message=message,
             source=source,
         )
+        event["payload"] = payload
+        return event
 
     def replay_test(self, source=None):
         seal = manager.last_message_seal.get(source) if source is not None else None

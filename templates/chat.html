@@ -7,7 +7,8 @@
     .chat-shell > .row > * { min-height: 0; }
     .chat-sidebar { border-right: 1px solid #dee2e6; overflow-y: auto; }
     .chat-user { cursor: pointer; }
-    .chat-user.active { background: #e8f1ff; }
+    .chat-user.active { background: #BF00FF; }
+    .chat-user.active .chat-unread { display: none; }
     .chat-avatar { width: 42px; height: 42px; }
     .chat-window { position: relative; height: 100%; background: #efeae2; min-height: 0; }
     .chat-messages { flex: 1 1 0; min-height: 0; overflow-y: scroll; overscroll-behavior: contain; }
@@ -88,6 +89,9 @@ const liveSecurityMode = document.getElementById("liveSecurityMode");
 let selectedUser = null;
 let sessionValid = true;
 let renderedMessageKeys = new Set();
+const unreadCounts = new Map();
+const userItems = new Map();
+const latestMessageTimes = new Map();
 
 function showSessionRecovery(message) {
     sessionValid = false;
@@ -136,6 +140,8 @@ function renderMessage(message, allowUnsafe = false) {
     if (renderedMessageKeys.has(messageKey)) return;
     renderedMessageKeys.add(messageKey);
     const outgoing = Number(message.userId) === currentUserId;
+    const conversationUserId = outgoing ? Number(message.recipient_id) : Number(message.userId);
+    latestMessageTimes.set(conversationUserId, message.time);
     const row = document.createElement("div");
     row.className = `message-bubble rounded-3 px-3 py-2 ${outgoing ? "message-out" : "message-in"}`;
 
@@ -188,9 +194,45 @@ function showMessages(history) {
     scrollMessagesToBottom();
 }
 
+function updateUnreadBadge(userId) {
+    const item = userItems.get(Number(userId));
+    if (!item) return;
+    const badge = item.querySelector(".chat-unread");
+    const count = unreadCounts.get(Number(userId)) || 0;
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.hidden = count === 0;
+    sortUserList();
+}
+
+function sortUserList() {
+    const items = Array.from(userItems.entries())
+        .sort(([firstId], [secondId]) => {
+            const unreadDifference = (unreadCounts.get(Number(secondId)) || 0)
+                - (unreadCounts.get(Number(firstId)) || 0);
+            if (unreadDifference) return unreadDifference;
+            const firstTime = Date.parse(latestMessageTimes.get(Number(firstId)) || "") || 0;
+            const secondTime = Date.parse(latestMessageTimes.get(Number(secondId)) || "") || 0;
+            return secondTime - firstTime;
+        })
+        .map(([, item]) => item);
+    items.forEach(item => userList.appendChild(item));
+}
+
+function markConversationRead(userId) {
+    unreadCounts.set(Number(userId), 0);
+    updateUnreadBadge(userId);
+}
+
+function markConversationUnread(userId) {
+    const numericUserId = Number(userId);
+    unreadCounts.set(numericUserId, (unreadCounts.get(numericUserId) || 0) + 1);
+    updateUnreadBadge(numericUserId);
+}
+
 async function openChat(user, element) {
     if (!sessionValid || !(await checkSession())) return;
     selectedUser = user;
+    markConversationRead(user.id);
     document.querySelectorAll(".chat-user").forEach(item => item.classList.remove("active"));
     element.classList.add("active");
     chatHeader.innerHTML = `<strong></strong><div class="small text-muted">Private conversation</div>`;
@@ -241,8 +283,9 @@ async function loadUsers() {
         const item = document.createElement("button");
         item.type = "button";
         item.className = "chat-user list-group-item list-group-item-action d-flex align-items-center gap-3 p-3";
-        item.innerHTML = '<span class="chat-avatar rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center"><i class="bi bi-person-fill"></i></span><span class="fw-semibold"></span>';
+        item.innerHTML = '<span class="chat-avatar rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center"><i class="bi bi-person-fill"></i></span><span class="fw-semibold flex-grow-1"></span><span class="chat-unread badge rounded-pill text-bg-danger" hidden>0</span>';
         item.querySelector(".fw-semibold").textContent = user.name;
+        userItems.set(Number(user.id), item);
         item.addEventListener("click", () => openChat(user, item));
         userList.appendChild(item);
     });
@@ -263,13 +306,21 @@ function handleSocketMessage(event) {
         renderInterceptStatus(message);
         return;
     }
-    if (!message.userId || !message.recipient_id || !selectedUser) return;
-    const belongsToChat = (Number(message.userId) === currentUserId && Number(message.recipient_id) === selectedUser.id)
-        || (Number(message.userId) === selectedUser.id && Number(message.recipient_id) === currentUserId);
+    if (message.type === "xss_demo") {
+        renderMessage(message, true);
+        return;
+    }
+    if (!message.userId || !message.recipient_id) return;
+    const messageUserId = Number(message.userId);
+    const recipientId = Number(message.recipient_id);
+    const conversationUserId = messageUserId === currentUserId ? recipientId : messageUserId;
+    const belongsToChat = selectedUser && conversationUserId === Number(selectedUser.id);
     if (belongsToChat) {
         const empty = messages.querySelector(".chat-empty");
         if (empty) messages.replaceChildren();
         renderMessage(message, true);
+    } else if (messageUserId !== currentUserId && recipientId === currentUserId) {
+        markConversationUnread(messageUserId);
     }
 }
 

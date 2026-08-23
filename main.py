@@ -931,6 +931,17 @@ async def dashboard_websocket(websocket: WebSocket):
                         source=user_id
                     )
 
+                    if attack_type == "XSS_TEST" and event.get("payload"):
+                        await manager.send_to_all_users({
+                            "type": "xss_demo",
+                            "text": event["payload"],
+                            "execution": "real" if not SECURITY_CONFIG["input_validation"] else "blocked",
+                            "userId": user_id,
+                            "recipient_id": user_id,
+                            "time": event["timestamp"],
+                            "security_mode": "XSS_TEST",
+                        })
+
                     await manager.send_security_event(event)
 
                 elif action == "RESET_LAB":

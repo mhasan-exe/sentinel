@@ -2,6 +2,53 @@
 
 {% block content %}
 
+<style>
+    .sentinel-hop {
+        position: relative;
+        z-index: 1;
+    }
+    .sentinel-hop-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4rem;
+        margin: 0 auto 0.6rem;
+    }
+    .sentinel-path-line {
+        position: absolute;
+        top: 28px;
+        left: 8%;
+        right: 8%;
+        height: 3px;
+        background: repeating-linear-gradient(
+            90deg,
+            #dee2e6 0 10px,
+            transparent 10px 18px
+        );
+        z-index: 0;
+    }
+    .sentinel-path-line.encrypted {
+        background: repeating-linear-gradient(
+            90deg,
+            #7b03aa 0 10px,
+            transparent 10px 18px
+        );
+    }
+    .sentinel-danger-zone {
+        border: 1px dashed #dc3545;
+        border-radius: 0.75rem;
+        background: rgba(220, 53, 69, 0.04);
+    }
+    .sentinel-safe-zone {
+        border: 1px dashed #7b03aa;
+        border-radius: 0.75rem;
+        background: rgba(123, 3, 170, 0.04);
+    }
+</style>
+
 <div class="container py-5">
 
     <div class="text-center py-5">
@@ -22,13 +69,12 @@
             <a href="/assessment" class="btn btn-primary btn-lg px-4">
                 Take Security Assessment
             </a>
-            <a href="/dashboard" class="btn btn-outline-dark btn-lg px-4">
-                Enter Security Lab
-            </a>
-            <a href="/presentation" class="btn btn-outline-secondary btn-lg px-4">
-                View Presentation
-            </a>
         </div>
+        <p class="small text-muted mt-3 mb-0">
+            The Security Lab dashboard and the Hacker View traffic monitor
+            are driven live from the presenter's screen — you don't need to
+            open them yourself.
+        </p>
     </div>
 
     <div class="row g-4 py-4">
@@ -62,6 +108,175 @@
                         See what each layer costs in performance, up to and
                         including post-quantum cryptography.
                     </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- HOW TODAY WORKS — role guide for judges/visitors              -->
+    <!-- ============================================================ -->
+    <div class="card border-0 shadow-sm my-5">
+        <div class="card-header bg-dark text-white">
+            <i class="bi bi-signpost-split-fill me-2"></i>
+            How this walkthrough works
+        </div>
+        <div class="card-body p-4">
+            <div class="row g-4">
+                <div class="col-md-6">
+                    <h6 class="fw-bold"><i class="bi bi-person-fill me-1"></i> What you'll do</h6>
+                    <ol class="mb-0 ps-3">
+                        <li class="mb-2">Take the 90-second Security Assessment above.</li>
+                        <li class="mb-2">Log in / register, then send a few chat messages like normal.</li>
+                        <li>Watch the projected screen as we intercept, attack, and defend that same traffic in real time.</li>
+                    </ol>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="fw-bold"><i class="bi bi-display me-1"></i> What's on the presenter's screen</h6>
+                    <ul class="mb-0 ps-3">
+                        <li class="mb-2"><strong>Dashboard</strong> — toggles each defense layer (TLS, encryption, ML-KEM/ML-DSA, JWT auth...) on or off.</li>
+                        <li class="mb-2"><strong>Hacker View</strong> — shows exactly what an eavesdropper on the network sees: plaintext when a layer is off, ciphertext when it's on.</li>
+                        <li>A second device runs the same attacks against your live session so you can compare "before" and "after" instantly.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TLS / INTERNET PATH EXPLAINER                                  -->
+    <!-- ============================================================ -->
+    <div class="py-4">
+        <div class="text-center mb-4">
+            <h3 class="fw-bold">What actually happens when you hit "Send"</h3>
+            <p class="text-muted">
+                Every layer below is a real, working part of this app — not a
+                simulation. Toggle it off on the dashboard and you'll see the
+                exact difference in Hacker View.
+            </p>
+        </div>
+
+        <!-- diagram: the journey of a chat message across the network -->
+        <div class="position-relative py-4 px-2 mb-4" style="min-height: 140px;">
+            <div class="sentinel-path-line encrypted"></div>
+            <div class="row text-center g-0">
+                <div class="col sentinel-hop">
+                    <div class="sentinel-hop-icon bg-primary bg-opacity-10 text-primary">
+                        <i class="bi bi-laptop"></i>
+                    </div>
+                    <div class="small fw-semibold">Your Browser</div>
+                    <div class="small text-muted">writes plaintext message</div>
+                </div>
+                <div class="col sentinel-hop">
+                    <div class="sentinel-hop-icon bg-primary bg-opacity-10 text-primary">
+                        <i class="bi bi-key-fill"></i>
+                    </div>
+                    <div class="small fw-semibold">TLS Handshake</div>
+                    <div class="small text-muted">X25519 / ML-KEM-768</div>
+                </div>
+                <div class="col sentinel-hop">
+                    <div class="sentinel-hop-icon bg-danger bg-opacity-10 text-danger">
+                        <i class="bi bi-diagram-3-fill"></i>
+                    </div>
+                    <div class="small fw-semibold">The Open Internet</div>
+                    <div class="small text-muted">ISPs, routers, Wi-Fi</div>
+                </div>
+                <div class="col sentinel-hop">
+                    <div class="sentinel-hop-icon bg-primary bg-opacity-10 text-primary">
+                        <i class="bi bi-hdd-network-fill"></i>
+                    </div>
+                    <div class="small fw-semibold">Sentinel Server</div>
+                    <div class="small text-muted">verifies &amp; decrypts</div>
+                </div>
+                <div class="col sentinel-hop">
+                    <div class="sentinel-hop-icon bg-primary bg-opacity-10 text-primary">
+                        <i class="bi bi-database-fill-lock"></i>
+                    </div>
+                    <div class="small fw-semibold">Database</div>
+                    <div class="small text-muted">stored for delivery</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-md-6">
+                <div class="card h-100 border-0 shadow-sm sentinel-danger-zone">
+                    <div class="card-body">
+                        <h6 class="fw-bold text-danger">
+                            <i class="bi bi-eye-fill me-1"></i> The danger zone: "the open internet"
+                        </h6>
+                        <p class="small mb-0">
+                            Between your browser and our server, your traffic
+                            passes through equipment you don't control — your
+                            Wi-Fi router, your ISP, backbone routers. Anyone
+                            with a foothold there can read raw traffic unless
+                            it's encrypted first. That's what
+                            <strong>Hacker View</strong> puts on screen: the
+                            attacker's exact vantage point at that midpoint.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card h-100 border-0 shadow-sm sentinel-safe-zone">
+                    <div class="card-body">
+                        <h6 class="fw-bold" style="color:#7b03aa;">
+                            <i class="bi bi-shield-lock-fill me-1"></i> What TLS does about it
+                        </h6>
+                        <p class="small mb-0">
+                            TLS wraps your connection in a private tunnel
+                            before any chat data leaves your browser. It does
+                            three things: <strong>encrypts</strong> the data
+                            (no one in the middle can read it),
+                            <strong>authenticates</strong> the server (you know
+                            you're really talking to Sentinel), and
+                            <strong>protects integrity</strong> (no one can
+                            silently edit the bytes in transit). Turn "TLS" off
+                            on the dashboard and all three disappear at once.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 mt-1">
+            <div class="col-md-6">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body">
+                        <h6 class="fw-bold">
+                            <i class="bi bi-diagram-2-fill me-1"></i> Where each layer actually sits
+                        </h6>
+                        <ul class="small mb-0 ps-3">
+                            <li class="mb-1"><strong>TLS / ML-KEM-768</strong> — negotiates a shared secret key <em>before</em> any message is sent, so no plaintext ever hits the wire.</li>
+                            <li class="mb-1"><strong>Ed25519 / ML-DSA-65</strong> — signs the handshake so the server's identity can't be spoofed mid-connection.</li>
+                            <li class="mb-1"><strong>JWT authentication</strong> — proves who's sending a message once the tunnel exists.</li>
+                            <li class="mb-1"><strong>Input validation</strong> — stops malicious payloads (like the XSS demo) from executing even if they slip through.</li>
+                            <li><strong>Message integrity</strong> — detects if a byte was tampered with in transit.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body">
+                        <h6 class="fw-bold">
+                            <i class="bi bi-hourglass-split me-1"></i> Why "post-quantum" (PQC) at all?
+                        </h6>
+                        <p class="small mb-0">
+                            Today's TLS relies on X25519/Ed25519 — math that's
+                            secure against classical computers, but that a
+                            sufficiently powerful quantum computer could break.
+                            An attacker can record encrypted traffic
+                            <em>today</em> and decrypt it years later once
+                            that hardware exists ("harvest now, decrypt
+                            later"). ML-KEM-768 and ML-DSA-65 are NIST-standardized
+                            replacements built to resist that. This lab lets
+                            you toggle between the classical pair and the PQC
+                            pair on the same live connection and measure the
+                            real handshake-time difference — not an estimate,
+                            an actual timed run.
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>
