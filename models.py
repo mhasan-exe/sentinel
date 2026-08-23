@@ -78,6 +78,11 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+    # False until the recipient has opened this conversation. Drives the
+    # WhatsApp-style Seen/Unseen indicator on the sender's own bubbles and
+    # the unread-count badge in the conversation list (see /api/chat-users
+    # and /api/messages/{other_user_id}/seen in main.py).
+    seen: Mapped[bool] = mapped_column(default=False)
 
 
 class SecuritySetting(Base):

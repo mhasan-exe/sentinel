@@ -9,7 +9,18 @@
     .chat-user { cursor: pointer; }
     .chat-user.active { background: #BF00FF; }
     .chat-user.active .chat-unread { display: none; }
-    .chat-avatar { width: 42px; height: 42px; }
+    .chat-user.active .chat-preview,
+    .chat-user.active .chat-list-time { color: rgba(255,255,255,.85) !important; }
+    .chat-avatar { width: 42px; height: 42px; flex: 0 0 auto; }
+    .chat-user-main { min-width: 0; }
+    .chat-preview {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+    .chat-list-time { white-space: nowrap; font-size: .72rem; }
+    .message-seen-status { font-size: .7rem; }
     .chat-window { position: relative; height: 100%; background: #efeae2; min-height: 0; }
     .chat-messages { flex: 1 1 0; min-height: 0; overflow-y: scroll; overscroll-behavior: contain; }
     .message-bubble { max-width: 75%; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -89,9 +100,9 @@ const liveSecurityMode = document.getElementById("liveSecurityMode");
 let selectedUser = null;
 let sessionValid = true;
 let renderedMessageKeys = new Set();
-const unreadCounts = new Map();
 const userItems = new Map();
-const latestMessageTimes = new Map();
+// One entry per other user: { id, name, last_message: {text, time, fromMe} | null, unread_count }
+const conversations = new Map();
 
 function showSessionRecovery(message) {
     sessionValid = false;
@@ -135,15 +146,51 @@ function formatTime(value) {
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function isSameDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// WhatsApp-style list timestamp: just the clock time for today, "Yesterday"
+// for yesterday, otherwise a short date — so the sidebar stays scannable.
+function formatListTime(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const now = new Date();
+    if (isSameDay(date, now)) {
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (isSameDay(date, yesterday)) return "Yesterday";
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function messageMetaText(message, outgoing) {
+    const parts = [formatTime(message.time)];
+    if (message.security_mode) parts.push(message.security_mode);
+    let text = parts.join(" · ");
+    if (outgoing) {
+        text += message.seen ? " · Seen" : " · Unseen";
+    }
+    return text;
+}
+
 function renderMessage(message, allowUnsafe = false) {
     const messageKey = message.message_id || message.client_msg_id || `${message.userId}:${message.recipient_id}:${message.time}:${message.text}`;
     if (renderedMessageKeys.has(messageKey)) return;
     renderedMessageKeys.add(messageKey);
     const outgoing = Number(message.userId) === currentUserId;
     const conversationUserId = outgoing ? Number(message.recipient_id) : Number(message.userId);
-    latestMessageTimes.set(conversationUserId, message.time);
+    updateConversationSummary(conversationUserId, {
+        text: message.text,
+        time: message.time,
+        fromMe: outgoing,
+    });
+
     const row = document.createElement("div");
     row.className = `message-bubble rounded-3 px-3 py-2 ${outgoing ? "message-out" : "message-in"}`;
+    if (message.message_id) row.dataset.messageId = String(message.message_id);
 
     const text = document.createElement("div");
     if (allowUnsafe && message.execution === "real") {
@@ -154,11 +201,38 @@ function renderMessage(message, allowUnsafe = false) {
     row.appendChild(text);
 
     const meta = document.createElement("div");
-    meta.className = "small text-muted text-end mt-1";
-    meta.textContent = `${formatTime(message.time)}${message.security_mode ? ` · ${message.security_mode}` : ""}`;
+    meta.className = "small text-muted text-end mt-1 message-seen-status";
+    meta.textContent = messageMetaText(message, outgoing);
     row.appendChild(meta);
     messages.appendChild(row);
     scrollMessagesToBottom();
+
+    // If I'm actively looking at this conversation and a new message just
+    // arrived from them, tell the server I've seen it right away — this is
+    // what makes the "Seen" flip on the sender's side without a reload.
+    if (!outgoing && selectedUser && conversationUserId === Number(selectedUser.id)) {
+        markSeenOnServer(conversationUserId);
+    }
+}
+
+// Flips already-rendered outgoing bubbles from "Unseen" to "Seen" the
+// instant the recipient opens the conversation — no reload needed.
+function applySeenUpdate(messageIds) {
+    messageIds.forEach(id => {
+        const row = messages.querySelector(`[data-message-id="${id}"]`);
+        if (!row) return;
+        const meta = row.querySelector(".message-seen-status");
+        if (!meta) return;
+        meta.textContent = meta.textContent.replace(/Unseen$/, "Seen");
+    });
+}
+
+async function markSeenOnServer(otherUserId) {
+    try {
+        await fetch(`/api/messages/${otherUserId}/seen`, { method: "POST", credentials: "same-origin" });
+    } catch (error) {
+        // Best-effort — the next openChat() or poll will retry.
+    }
 }
 
 function renderInterceptStatus(message) {
@@ -194,39 +268,58 @@ function showMessages(history) {
     scrollMessagesToBottom();
 }
 
-function updateUnreadBadge(userId) {
-    const item = userItems.get(Number(userId));
-    if (!item) return;
+function renderUserItemContent(item, conv) {
+    const preview = conv.last_message
+        ? `${conv.last_message.fromMe ? "You: " : ""}${conv.last_message.text}`
+        : "No messages yet";
+    item.querySelector(".chat-user-name").textContent = conv.name;
+    item.querySelector(".chat-preview").textContent = preview;
+    item.querySelector(".chat-list-time").textContent = formatListTime(conv.last_message && conv.last_message.time);
     const badge = item.querySelector(".chat-unread");
-    const count = unreadCounts.get(Number(userId)) || 0;
-    badge.textContent = count > 99 ? "99+" : String(count);
-    badge.hidden = count === 0;
+    badge.textContent = conv.unread_count > 99 ? "99+" : String(conv.unread_count);
+    badge.hidden = conv.unread_count === 0;
+}
+
+// Merges a live-arriving (or freshly loaded) message into the sidebar
+// summary for that conversation, bumps unread if it's an incoming message
+// for a conversation I don't currently have open, and re-sorts so the
+// most recently active conversation is always at the top — real WhatsApp
+// ordering, driven purely by last-message timestamp.
+function updateConversationSummary(otherUserId, lastMessage) {
+    const numericId = Number(otherUserId);
+    const conv = conversations.get(numericId);
+    if (!conv) return;
+    conv.last_message = lastMessage;
+    const isOpenRightNow = selectedUser && numericId === Number(selectedUser.id);
+    if (!lastMessage.fromMe && !isOpenRightNow) {
+        conv.unread_count += 1;
+    }
+    const item = userItems.get(numericId);
+    if (item) renderUserItemContent(item, conv);
     sortUserList();
 }
 
 function sortUserList() {
-    const items = Array.from(userItems.entries())
-        .sort(([firstId], [secondId]) => {
-            const unreadDifference = (unreadCounts.get(Number(secondId)) || 0)
-                - (unreadCounts.get(Number(firstId)) || 0);
-            if (unreadDifference) return unreadDifference;
-            const firstTime = Date.parse(latestMessageTimes.get(Number(firstId)) || "") || 0;
-            const secondTime = Date.parse(latestMessageTimes.get(Number(secondId)) || "") || 0;
-            return secondTime - firstTime;
+    const items = Array.from(conversations.entries())
+        .sort(([, firstConv], [, secondConv]) => {
+            const firstTime = Date.parse(firstConv.last_message && firstConv.last_message.time || "") || 0;
+            const secondTime = Date.parse(secondConv.last_message && secondConv.last_message.time || "") || 0;
+            if (firstTime !== secondTime) return secondTime - firstTime;
+            return firstConv.name.localeCompare(secondConv.name);
         })
-        .map(([, item]) => item);
+        .map(([id]) => userItems.get(id))
+        .filter(Boolean);
     items.forEach(item => userList.appendChild(item));
 }
 
 function markConversationRead(userId) {
-    unreadCounts.set(Number(userId), 0);
-    updateUnreadBadge(userId);
-}
-
-function markConversationUnread(userId) {
-    const numericUserId = Number(userId);
-    unreadCounts.set(numericUserId, (unreadCounts.get(numericUserId) || 0) + 1);
-    updateUnreadBadge(numericUserId);
+    const numericId = Number(userId);
+    const conv = conversations.get(numericId);
+    if (!conv) return;
+    conv.unread_count = 0;
+    const item = userItems.get(numericId);
+    if (item) renderUserItemContent(item, conv);
+    markSeenOnServer(numericId);
 }
 
 async function openChat(user, element) {
@@ -275,20 +368,36 @@ async function loadUsers() {
     }
     const users = await response.json();
     userList.replaceChildren();
+    conversations.clear();
+    userItems.clear();
     if (!users.length) {
         userList.innerHTML = '<div class="p-3 text-muted">No other users registered.</div>';
         return;
     }
-    users.forEach(user => {
+    users.forEach(conv => {
+        conversations.set(Number(conv.id), conv);
         const item = document.createElement("button");
         item.type = "button";
         item.className = "chat-user list-group-item list-group-item-action d-flex align-items-center gap-3 p-3";
-        item.innerHTML = '<span class="chat-avatar rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center"><i class="bi bi-person-fill"></i></span><span class="fw-semibold flex-grow-1"></span><span class="chat-unread badge rounded-pill text-bg-danger" hidden>0</span>';
-        item.querySelector(".fw-semibold").textContent = user.name;
-        userItems.set(Number(user.id), item);
-        item.addEventListener("click", () => openChat(user, item));
+        item.innerHTML = `
+            <span class="chat-avatar rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center">
+                <i class="bi bi-person-fill"></i>
+            </span>
+            <span class="chat-user-main flex-grow-1 d-flex flex-column">
+                <span class="d-flex justify-content-between align-items-baseline gap-2">
+                    <span class="chat-user-name fw-semibold text-truncate"></span>
+                    <span class="chat-list-time text-muted flex-shrink-0"></span>
+                </span>
+                <span class="chat-preview small text-muted"></span>
+            </span>
+            <span class="chat-unread badge rounded-pill text-bg-danger" hidden>0</span>
+        `;
+        renderUserItemContent(item, conv);
+        userItems.set(Number(conv.id), item);
+        item.addEventListener("click", () => openChat({ id: conv.id, name: conv.name }, item));
         userList.appendChild(item);
     });
+    sortUserList();
 }
 
 function handleSocketMessage(event) {
@@ -306,6 +415,10 @@ function handleSocketMessage(event) {
         renderInterceptStatus(message);
         return;
     }
+    if (message.type === "messages_seen") {
+        applySeenUpdate(message.message_ids || []);
+        return;
+    }
     if (message.type === "xss_demo") {
         renderMessage(message, true);
         return;
@@ -320,7 +433,7 @@ function handleSocketMessage(event) {
         if (empty) messages.replaceChildren();
         renderMessage(message, true);
     } else if (messageUserId !== currentUserId && recipientId === currentUserId) {
-        markConversationUnread(messageUserId);
+        updateConversationSummary(messageUserId, { text: message.text, time: message.time, fromMe: false });
     }
 }
 

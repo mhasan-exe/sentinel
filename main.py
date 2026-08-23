@@ -76,6 +76,30 @@ async def handle_http_exception(request: Request, exc: HTTPException):
 # Create any tables added since the last deployment, including the chat table.
 # This is idempotent and works with the Neon DATABASE_URL on Vercel.
 Base.metadata.create_all(bind=engine)
+
+
+def _migrate_add_message_seen_column():
+    """
+    create_all() only creates missing TABLES, it never ALTERs an existing
+    one — and a database.db from before the seen/unseen feature already
+    has a messages table without this column. Add it if it's missing,
+    on both SQLite and Postgres. Idempotent: safe to run on every boot.
+    """
+    from sqlalchemy import text as _sql_text, inspect as _sql_inspect
+
+    inspector = _sql_inspect(engine)
+    if "messages" not in inspector.get_table_names():
+        return
+    existing_columns = {col["name"] for col in inspector.get_columns("messages")}
+    if "seen" in existing_columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            _sql_text("ALTER TABLE messages ADD COLUMN seen BOOLEAN DEFAULT 0")
+        )
+
+
+_migrate_add_message_seen_column()
 reload_security_config()
 
 # Negative ids so anonymous/unauthenticated demo connections can never
@@ -433,6 +457,7 @@ async def _deliver_chat_message(sender_id: int, recipient_id: int, text: str, cl
             recipient_id=recipient_id,
             text=text,
             created_at=datetime.fromisoformat(timestamp),
+            seen=False,
         )
         db.add(stored_message)
         db.commit()
@@ -449,6 +474,7 @@ async def _deliver_chat_message(sender_id: int, recipient_id: int, text: str, cl
         "client_msg_id": client_msg_id,
         "security_mode": packet["security_mode"],
         "execution": "real" if not SECURITY_CONFIG["input_validation"] else "blocked",
+        "seen": False,
     }
 
     await manager.send_to_user(sender_id, message)
@@ -1217,8 +1243,47 @@ def chat_users(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user),
 ):
+    """
+    WhatsApp-style conversation list: every other user, plus (if any
+    messages exist between them and me) the last message's text/time/
+    who-sent-it and how many of their messages to me are still unseen.
+    The frontend sorts by last_message.time so the most recently active
+    conversation is always on top, exactly like a real chat app.
+    """
     users = db.scalars(select(User).where(User.id != user_id).order_by(User.name)).all()
-    return [{"id": user.id, "name": user.name} for user in users]
+
+    conversations = []
+    for other in users:
+        last_message = db.scalars(
+            select(Message)
+            .where(
+                ((Message.sender_id == user_id) & (Message.recipient_id == other.id))
+                | ((Message.sender_id == other.id) & (Message.recipient_id == user_id))
+            )
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        ).first()
+
+        unread_count = db.scalars(
+            select(Message).where(
+                (Message.sender_id == other.id)
+                & (Message.recipient_id == user_id)
+                & (Message.seen == False)  # noqa: E712 - SQLAlchemy needs == here, not `is`
+            )
+        ).all()
+
+        conversations.append({
+            "id": other.id,
+            "name": other.name,
+            "last_message": {
+                "text": last_message.text,
+                "time": last_message.created_at.isoformat(),
+                "fromMe": last_message.sender_id == user_id,
+            } if last_message else None,
+            "unread_count": len(unread_count),
+        })
+
+    return conversations
 
 
 @app.get("/api/session-status")
@@ -1245,10 +1310,47 @@ def chat_history(
             "message_id": row.id,
             "text": row.text,
             "time": row.created_at.isoformat(),
-            "security_mode": "HISTORY",
+            "seen": row.seen,
         }
         for row in rows
     ]
+
+
+@app.post("/api/messages/{other_user_id}/seen")
+async def mark_messages_seen(
+    other_user_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user),
+):
+    """
+    Called when I open (or am already inside) my conversation with
+    other_user_id — marks every message THEY sent ME as seen, and tells
+    their live socket so their own bubbles flip to "Seen" immediately
+    instead of waiting for them to reload.
+    """
+    unseen_rows = db.scalars(
+        select(Message).where(
+            (Message.sender_id == other_user_id)
+            & (Message.recipient_id == user_id)
+            & (Message.seen == False)  # noqa: E712
+        )
+    ).all()
+
+    if not unseen_rows:
+        return {"marked_seen": 0}
+
+    message_ids = [row.id for row in unseen_rows]
+    for row in unseen_rows:
+        row.seen = True
+    db.commit()
+
+    await manager.send_to_user(other_user_id, {
+        "type": "messages_seen",
+        "by": user_id,
+        "message_ids": message_ids,
+    })
+
+    return {"marked_seen": len(message_ids)}
 
 
 @app.get("/profile/{profile_id}")
