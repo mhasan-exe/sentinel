@@ -174,6 +174,29 @@
 
     </div>
 
+    <div class="row g-4 mt-1">
+        <div class="col-lg-5">
+            <div class="card shadow-sm border-0 h-100">
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-grid-3x3-gap me-2"></i>Defense Comparison</span>
+                    <button class="btn btn-sm btn-outline-light" onclick="resetLab()">Reset Lab</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0 align-middle">
+                        <thead><tr><th>Defense</th><th>OFF</th><th>ON</th><th>Live</th></tr></thead>
+                        <tbody id="defenseMatrix"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="card shadow-sm border-0 h-100">
+                <div class="card-header bg-dark text-white">Measured Handshake Comparison</div>
+                <div class="card-body"><canvas id="handshakeChart" height="150"></canvas></div>
+            </div>
+        </div>
+    </div>
+
 
     <div class="card shadow-sm border-0 mt-4">
 
@@ -320,6 +343,7 @@
 </div>
 
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
 
 const protocol =
@@ -368,6 +392,55 @@ const layers =
 
 const events =
     document.getElementById("events");
+
+const defenseMatrix = document.getElementById("defenseMatrix");
+const handshakeChartCanvas = document.getElementById("handshakeChart");
+let handshakeChart = null;
+
+function renderDefenseMatrix(config) {
+    const rows = [
+        ["JWT Authentication", "jwt_authentication", "Forged token accepted", "Token verified"],
+        ["Input Validation", "input_validation", "XSS payload executes", "Payload escaped"],
+        ["Encryption", "encryption", "Plaintext visible", "AES-GCM ciphertext"],
+        ["Password Hashing", "password_hashing", "Password exposed", "Argon2id hash"],
+        ["Message Integrity", "message_integrity", "Tampering accepted", "Tampering blocked"],
+        ["ML-KEM", "ml_kem", "X25519", "ML-KEM-768"],
+    ];
+    defenseMatrix.replaceChildren();
+    rows.forEach(([label, key, off, on]) => {
+        const tr = document.createElement("tr");
+        [label, off, on, config[key] ? "ON" : "OFF"].forEach((value, index) => {
+            const td = document.createElement("td");
+            td.textContent = value;
+            if (index === 3) td.className = config[key] ? "text-success fw-semibold" : "text-danger fw-semibold";
+            tr.appendChild(td);
+        });
+        defenseMatrix.appendChild(tr);
+    });
+}
+
+async function renderHandshakeChart() {
+    const rows = await fetch("/api/experiments").then(response => response.json());
+    const measured = rows.filter(row => row.experiment_type === "HANDSHAKE" && row.latency_ms !== null);
+    const grouped = {};
+    measured.forEach(row => {
+        grouped[row.configuration] ??= [];
+        grouped[row.configuration].push(row.latency_ms);
+    });
+    const labels = Object.keys(grouped);
+    const values = labels.map(label => grouped[label].reduce((sum, value) => sum + value, 0) / grouped[label].length);
+    if (!window.Chart) return;
+    handshakeChart?.destroy();
+    handshakeChart = new Chart(handshakeChartCanvas, {
+        type: "bar",
+        data: { labels, datasets: [{ label: "Measured average (ms)", data: values, backgroundColor: ["#6c757d", "#198754"] }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    });
+}
+
+function resetLab() {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ action: "RESET_LAB" }));
+}
 
 
 const layerNames = {
@@ -435,10 +508,13 @@ socket.onmessage = function(event) {
 
     if (data.type === "security_config") {
         renderSecurityLayers(data.config);
+        renderDefenseMatrix(data.config);
+        renderHandshakeChart();
     }
 
     if (data.type === "security_event") {
         renderEvent(data);
+        if (typeof loadHistory === "function") loadHistory();
     }
 
     if (data.type === "benchmark_progress") {

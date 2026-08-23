@@ -12,13 +12,16 @@
     </p>
 
     <div class="d-flex justify-content-center">
-        <img
-            id="slideImage"
-            src="/static/presentation/{{ slide_files[0] }}"
-            class="border rounded shadow-sm"
-            style="max-width: 100%; max-height: 75vh;"
-            alt="Slide"
-        >
+        <div class="position-relative">
+            <img
+                id="slideImage"
+                src="/static/presentation/{{ slide_files[0] }}"
+                class="border rounded shadow-sm"
+                style="max-width: 100%; max-height: 75vh;"
+                alt="Slide"
+            >
+            <span id="livePresentationStatus" class="badge bg-secondary position-absolute top-0 end-0 m-2">Live data loading...</span>
+        </div>
     </div>
 
     <div class="d-flex justify-content-center align-items-center gap-3 mt-3">
@@ -62,6 +65,21 @@ document.addEventListener("keydown", function (event) {
 });
 
 render();
+
+async function updatePresentationStatus() {
+    try {
+        const response = await fetch("/api/pqc-status");
+        const data = await response.json();
+        const status = document.getElementById("livePresentationStatus");
+        status.textContent = data.pqc_available ? "PQC LIVE" : "PQC UNAVAILABLE";
+        status.className = `badge position-absolute top-0 end-0 m-2 ${data.pqc_available ? "bg-success" : "bg-warning text-dark"}`;
+    } catch (error) {
+        document.getElementById("livePresentationStatus").textContent = "Live data offline";
+    }
+}
+
+updatePresentationStatus();
+setInterval(updatePresentationStatus, 5000);
 
 </script>
 
