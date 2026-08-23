@@ -95,7 +95,7 @@ def _migrate_add_message_seen_column():
         return
     with engine.begin() as connection:
         connection.execute(
-            _sql_text("ALTER TABLE messages ADD COLUMN seen BOOLEAN DEFAULT 0")
+            _sql_text("ALTER TABLE messages ADD COLUMN seen BOOLEAN DEFAULT FALSE")
         )
 
 
